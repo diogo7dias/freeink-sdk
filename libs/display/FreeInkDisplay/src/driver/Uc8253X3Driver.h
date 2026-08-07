@@ -37,6 +37,13 @@ struct Uc8253X3Config {
   Uc8253LutBank gc;        // OEM 4-level grayscale nudge (CDI 0x29)
   Uc8253LutBank preBwMid;  // OEM grayscale preconditioning settle (CDI 0xA9)
   uint8_t lutLen;          // bytes per LUT sent to the controller (42)
+  // PLL control byte (R30h): the panel's frame clock. Every frame the waveform LUTs count
+  // out lasts one period of it, so this scales the duration of EVERY refresh. Appended at
+  // the end of the struct on purpose — inserting it earlier would silently shift the
+  // positional initialisers that build the LUT banks. Exposed here rather than fixed in
+  // initController() so a board can tune it without forking the driver. 0x09 is the value
+  // this driver has always sent.
+  uint8_t pll;
 };
 
 const Uc8253X3Config& uc8253X3DefaultConfig();
