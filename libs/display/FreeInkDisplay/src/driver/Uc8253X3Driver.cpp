@@ -47,7 +47,8 @@ const Uc8253X3Config& uc8253X3DefaultConfig() {
        lut_x3_bb_factory_p1},
       {lut_x3_vcom_factory_p2, lut_x3_ww_factory_p2, lut_x3_bw_factory_p2, lut_x3_wb_factory_p2,
        lut_x3_bb_factory_p2},
-      42,  // controller accepts 42 bytes of each 43-byte array
+      42,    // controller accepts 42 bytes of each 43-byte array
+      0x09,  // PLL: the value this driver has always sent
   };
   return cfg;
 }
@@ -127,7 +128,7 @@ void Uc8253X3Driver::initController(EpdBus& bus) {
   bus.data(0x3C);
   bus.data(0x37);
   bus.cmd(CMD_PLL_CONTROL);
-  bus.data(0x09);
+  bus.data(_cfg.pll);
   bus.cmd(CMD_LV_SELECTION);
   bus.data(0x02);
 
