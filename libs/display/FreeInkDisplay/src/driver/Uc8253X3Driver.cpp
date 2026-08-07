@@ -143,6 +143,7 @@ void Uc8253X3Driver::initController(EpdBus& bus) {
 
 void Uc8253X3Driver::begin(EpdBus& bus) {
   bus.reset(50);  // X3 needs an extra settle after reset
+  _settleOwedBeforeNextDiff = false;
   _redRamSynced = false;
   _initialFullSyncsRemaining = 2;
   _forceFullSyncNext = false;
@@ -168,6 +169,18 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
 
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
+  // Pay the settle owed by an earlier full sync, now that a differential is genuinely
+  // about to run. Anything else re-syncs by itself, so the debt is simply dropped.
+  if (_settleOwedBeforeNextDiff) {
+    _settleOwedBeforeNextDiff = false;
+    if (fastMode && _redRamSynced) {
+      loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
+      bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
+      triggerRefresh(bus, false);
+      bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
+      bus.cmd(CMD_DATA_STOP);
+    }
+  }
   const bool forcedFullSync = _forceFullSyncNext;
   const bool doFullSync =
       (!fastMode && !halfMode) || !_redRamSynced || _initialFullSyncsRemaining > 0 || forcedFullSync;
@@ -230,7 +243,11 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
     _isScreenOn = false;
   }
 
-  if (!fastMode) delay(200);
+  // Vendor settle after a non-differential waveform. Skipped when the panel is being
+  // powered down: nothing is drawn again before the controller is re-initialised, so
+  // there is no state left for it to settle. That is 200 ms straight off every lock,
+  // where a single FULL was measured at 2003 ms of panel time on lector.
+  if (!fastMode && !turnOff) delay(kPostWaveformSettleMs);
 
   uint8_t postConditionPasses = 0;
   if (doFullSync) {
@@ -263,14 +280,17 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   _grayState.lsbValid = false;
   _redRamSynced = true;
 
-  // First differential after a full garbles on X3; spend a no-op fast settle of
-  // the just-displayed frame so the caller's next diff is clean.
-  if (doFullSync) {
-    loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
-    bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
-    triggerRefresh(bus, turnOff);
-    bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
-    bus.cmd(CMD_DATA_STOP);
+  // The first differential after a full garbles on X3, so one no-op fast settle of the
+  // just-displayed frame is owed before the next differential. Owed, not due: it is a
+  // whole extra waveform (~620 ms measured on lector) and it buys nothing unless a
+  // differential actually follows.
+  //
+  // So it is recorded as pending and paid lazily in displayStart(), and only when the
+  // next refresh is a Fast one. A full or half re-syncs on its own, and a power-down ends
+  // the frame's life entirely — the common case at sleep, where this pass used to be pure
+  // cost on the way out the door.
+  if (doFullSync && !turnOff) {
+    _settleOwedBeforeNextDiff = true;
   }
 
   if (doFullSync && _initialFullSyncsRemaining > 0) {

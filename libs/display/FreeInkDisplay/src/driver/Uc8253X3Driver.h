@@ -67,6 +67,11 @@ class Uc8253X3Driver : public PanelDriver {
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
 
+  // Vendor settle after a non-differential waveform. Named so its cost is visible, and so
+  // a shorter value can be tried against a device; 200 ms is what this driver has always
+  // used and is not itself a verified figure.
+  static constexpr uint32_t kPostWaveformSettleMs = 200;
+
   bool supportsStripGrayscale() const override { return true; }
   void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
   void preconditionGrayscale(EpdBus& bus, uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;
@@ -99,6 +104,9 @@ class Uc8253X3Driver : public PanelDriver {
   bool _inGrayscaleMode = false;
   uint8_t _initialFullSyncsRemaining = 0;
   bool _forceFullSyncNext = false;
+  // A full sync owes one no-op fast settle before the next differential can be trusted.
+  // Deferred rather than paid immediately: see displayFinish().
+  bool _settleOwedBeforeNextDiff = false;
   uint8_t _forcedConditionPassesNext = 0;
   struct GrayState {
     bool lastBaseWasPartial = false;
