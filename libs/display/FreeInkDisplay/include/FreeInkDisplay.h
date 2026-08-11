@@ -232,6 +232,12 @@ class FreeInkDisplay {
   // Power management
   void deepSleep();
 
+  // Drop the panel's high-voltage rails, leaving the controller awake and the image
+  // on the glass. Cheap to undo: the next paint powers the rails back up by itself.
+  // Call it whenever the device is about to sit idle — a powered panel with no
+  // waveform running lets the image drift. See PanelDriver::powerOff.
+  void powerOffPanel();
+
   // Optional hooks fired around long BUSY waits (~0.3-2 s per refresh), so host
   // firmware can apply its own power policy (e.g. reduce the CPU clock) for the
   // wait window. Forwards to the bus, which owns every driver's busy-polling.

@@ -64,6 +64,7 @@ class Uc8253X3Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOff(EpdBus& bus) override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   // Refresh split: displayStart fires the waveform and returns while the ~130-770 ms

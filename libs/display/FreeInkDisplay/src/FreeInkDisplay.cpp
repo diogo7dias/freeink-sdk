@@ -883,6 +883,13 @@ void FreeInkDisplay::deepSleep() {
   if (_driver) _driver->deepSleep(_bus);
 }
 
+void FreeInkDisplay::powerOffPanel() {
+  // A deferred refresh is still driving the panel; cutting its rails mid-waveform would
+  // leave the frame half-written.
+  syncPendingAsync();
+  if (_driver) _driver->powerOff(_bus);
+}
+
 // ============================================================================
 // Desktop/test helper
 // ============================================================================

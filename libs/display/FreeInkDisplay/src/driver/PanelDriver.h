@@ -48,6 +48,19 @@ class PanelDriver {
   virtual void begin(EpdBus& bus) = 0;
   virtual void deepSleep(EpdBus& bus) = 0;
 
+  // Drop the panel's high-voltage rails without putting the controller to sleep.
+  //
+  // The image is bistable and survives with no power at all, but a controller left
+  // powered with no waveform running keeps a weak bias on the pixels, and over seconds
+  // the image drifts. deepSleep() also powers the rails down, but it parks the controller
+  // so hard that the next paint needs a full re-init; this is the cheap half, and the
+  // paint path already brings the rails back up on its own (see each driver's power-on
+  // guard), so a powered-off panel costs nothing but the next PON.
+  //
+  // Default is a no-op: a driver whose paint path does not track power state has nothing
+  // to drop here.
+  virtual void powerOff(EpdBus& bus) { (void)bus; }
+
   // --- core paint path (load RAM + refresh) ---
   virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) = 0;
   virtual void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
