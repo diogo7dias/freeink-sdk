@@ -514,6 +514,13 @@ void Uc8253X3Driver::skipInitialResync() {
   _redRamSynced = true;
 }
 
+void Uc8253X3Driver::powerOff(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" X3 power-down");
+  _isScreenOn = false;
+}
+
 void Uc8253X3Driver::deepSleep(EpdBus& bus) {
   if (_isScreenOn) {
     bus.cmd(CMD_POWER_OFF);
