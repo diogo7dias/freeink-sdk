@@ -2,6 +2,10 @@
 
 #if FREEINK_CAP_FRONTLIGHT
 #include <M5Pm1.h>
+#ifdef FREEINK_FRONTLIGHT_LS
+#include <driver/gpio.h>
+#include <driver/ledc.h>
+#endif
 
 namespace {
 constexpr uint32_t maxDuty(uint8_t bits) { return (1u << bits) - 1u; }
@@ -38,7 +42,49 @@ uint32_t physicalDuty(uint32_t logicalDuty, uint32_t full, bool activeHigh) {
   return activeHigh ? logicalDuty : full - logicalDuty;
 }
 
-#if defined(ARDUINO) && ESP_ARDUINO_VERSION_MAJOR >= 3
+#ifdef FREEINK_FRONTLIGHT_LS
+// Light-sleep-surviving LEDC: clock the timer from RC_FAST (~17.5 MHz on the
+// S3 — the practical LEDC source that keeps running through light sleep at
+// near-zero extra sleep power; XTAL can also be kept up but costs far more in
+// sleep current), mark the
+// channels KEEP_ALIVE, and disable the GPIO sleep-isolation override on the
+// output pins (a documented gotcha: sleep entry reconfigures the pad and kills
+// the PWM even when the clock survives). RC_FAST at 10 kHz supports up to
+// 10-bit resolution (17.5 MHz / 10 kHz = 1750 >= 1024), so the board profiles'
+// full duty range — including setBrightnessLevel's level-1 minimum step — stays
+// expressible. Uses the IDF driver directly (fixed LEDC_TIMER_0 + the channel
+// ids below) because the Arduino helpers don't expose sleep_mode; safe here
+// because frontlight boards using this flag have no other LEDC consumer.
+void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
+  ledc_timer_config_t timer = {};
+  timer.speed_mode = LEDC_LOW_SPEED_MODE;
+  timer.duty_resolution = static_cast<ledc_timer_bit_t>(bits);
+  timer.timer_num = LEDC_TIMER_0;
+  timer.freq_hz = freq;
+  timer.clk_cfg = LEDC_USE_RC_FAST_CLK;
+  if (ledc_timer_config(&timer) != ESP_OK) {
+    // freq/bits exceed RC_FAST — leave the light unconfigured rather than
+    // silently falling back to a clock that freezes in light sleep.
+    return;
+  }
+  ledc_channel_config_t chan = {};
+  chan.gpio_num = gpio;
+  chan.speed_mode = LEDC_LOW_SPEED_MODE;
+  chan.channel = static_cast<ledc_channel_t>(ch);
+  chan.intr_type = LEDC_INTR_DISABLE;
+  chan.timer_sel = LEDC_TIMER_0;
+  chan.duty = 0;
+  chan.hpoint = 0;
+  chan.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
+  // ledc_channel_config() disables the pad's sleep-isolation override itself
+  // for KEEP_ALIVE channels (IDF 5.5), so no explicit gpio_sleep_sel_dis here.
+  ledc_channel_config(&chan);
+}
+void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) {
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch), duty);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch));
+}
+#elif defined(ARDUINO) && ESP_ARDUINO_VERSION_MAJOR >= 3
 void attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) { ledcAttach(gpio, freq, bits); }
 void writeChannel(int8_t gpio, uint8_t /*ch*/, uint32_t duty) { ledcWrite(gpio, duty); }
 #else
