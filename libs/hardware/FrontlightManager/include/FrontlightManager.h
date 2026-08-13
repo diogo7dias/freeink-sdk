@@ -68,6 +68,17 @@ class FrontlightManager {
   // Recompute and write both channels from _brightness + _warmPercent.
   void apply();
 #endif
+#ifdef FREEINK_FRONTLIGHT_LS
+  // Keep RC_FAST powered through light sleep only while the light is actually
+  // lit. The LEDC driver's KEEP_ALIVE config pins RC_FAST (and the digital
+  // domain at its higher sleep bias) for every light-sleep window from boot;
+  // begin() cancels that via the refcounted sleep sub-mode API and apply()
+  // re-arms it on 0<->nonzero total-duty transitions, so dark idle sleeps at
+  // full depth.
+  void updateLsKeepAlive(bool lit);
+  bool _lsAttachOk = false;         // both channel attaches succeeded (refcount is balanced)
+  bool _lsKeepAliveArmed = false;   // our own +1 on the RC_FAST sleep sub-mode is active
+#endif
 
   bool _begun = false;
   uint8_t _brightness = 0;

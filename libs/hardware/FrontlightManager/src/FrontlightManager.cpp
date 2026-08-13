@@ -5,6 +5,11 @@
 #ifdef FREEINK_FRONTLIGHT_LS
 #include <driver/gpio.h>
 #include <driver/ledc.h>
+// esp_sleep_sub_mode_config lives in a private IDF header (no public API exists
+// for balancing the refcounted RC_FAST keep-on the LEDC driver takes for
+// KEEP_ALIVE channels — the driver manages it through this same header). Pinned
+// IDF 5.5; re-check on IDF bumps.
+#include <esp_private/esp_sleep_internal.h>
 #endif
 
 namespace {
@@ -55,7 +60,7 @@ uint32_t physicalDuty(uint32_t logicalDuty, uint32_t full, bool activeHigh) {
 // expressible. Uses the IDF driver directly (fixed LEDC_TIMER_0 + the channel
 // ids below) because the Arduino helpers don't expose sleep_mode; safe here
 // because frontlight boards using this flag have no other LEDC consumer.
-void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
+bool attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
   ledc_timer_config_t timer = {};
   timer.speed_mode = LEDC_LOW_SPEED_MODE;
   timer.duty_resolution = static_cast<ledc_timer_bit_t>(bits);
@@ -65,7 +70,7 @@ void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
   if (ledc_timer_config(&timer) != ESP_OK) {
     // freq/bits exceed RC_FAST — leave the light unconfigured rather than
     // silently falling back to a clock that freezes in light sleep.
-    return;
+    return false;
   }
   ledc_channel_config_t chan = {};
   chan.gpio_num = gpio;
@@ -78,19 +83,20 @@ void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
   chan.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
   // ledc_channel_config() disables the pad's sleep-isolation override itself
   // for KEEP_ALIVE channels (IDF 5.5), so no explicit gpio_sleep_sel_dis here.
-  ledc_channel_config(&chan);
+  return ledc_channel_config(&chan) == ESP_OK;
 }
 void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) {
   ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch), duty);
   ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch));
 }
 #elif defined(ARDUINO) && ESP_ARDUINO_VERSION_MAJOR >= 3
-void attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) { ledcAttach(gpio, freq, bits); }
+bool attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) { return ledcAttach(gpio, freq, bits); }
 void writeChannel(int8_t gpio, uint8_t /*ch*/, uint32_t duty) { ledcWrite(gpio, duty); }
 #else
-void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
+bool attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
   ledcSetup(ch, freq, bits);
   ledcAttachPin(gpio, ch);
+  return true;
 }
 void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) { ledcWrite(ch, duty); }
 #endif
@@ -108,10 +114,28 @@ void FrontlightManager::begin() {
   }
   if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
 
-  attachChannel(fl.gpio, LEDC_CH_COOL, fl.pwmFrequency, fl.pwmResolutionBits);
+  bool attachOk = attachChannel(fl.gpio, LEDC_CH_COOL, fl.pwmFrequency, fl.pwmResolutionBits);
   if (fl.gpioWarm != BoardConfig::PIN_UNASSIGNED) {
-    attachChannel(fl.gpioWarm, LEDC_CH_WARM, fl.pwmFrequency, fl.pwmResolutionBits);
+    attachOk = attachChannel(fl.gpioWarm, LEDC_CH_WARM, fl.pwmFrequency, fl.pwmResolutionBits) || attachOk;
   }
+#ifdef FREEINK_FRONTLIGHT_LS
+  // The FIRST successful KEEP_ALIVE channel config takes a single refcounted +1
+  // on the RC_FAST sleep sub-mode (esp_sleep_sub_mode_config; the driver's
+  // global-clock latch means later configs don't take another), which would
+  // keep RC_FAST — and the digital domain at its higher sleep bias — powered
+  // through every light-sleep window from boot, even with the light off.
+  // Balance it here and let apply() re-arm only while the light is actually
+  // lit. attachOk is true when ANY channel config succeeded (exactly the
+  // condition under which the driver's +1 was taken); the !_begun guard keeps a
+  // hypothetical second begin() from decrementing twice.
+  _lsAttachOk = attachOk;
+  _lsKeepAliveArmed = false;
+  if (attachOk && !_begun) {
+    esp_sleep_sub_mode_config(ESP_SLEEP_DIG_USE_RC_FAST_MODE, false);
+  }
+#else
+  (void)attachOk;
+#endif
   _begun = true;
   setBrightness(0);
 #endif
@@ -147,12 +171,26 @@ void FrontlightManager::apply() {
     warmDuty = (totalDuty * _warmPercent + 50u) / 100u;
     coolDuty = totalDuty - warmDuty;
   }
+#ifdef FREEINK_FRONTLIGHT_LS
+  updateLsKeepAlive(totalDuty != 0);
+#endif
   writeChannel(fl.gpio, LEDC_CH_COOL, physicalDuty(coolDuty, full, fl.activeHigh));
 
   if (dual) {
     writeChannel(fl.gpioWarm, LEDC_CH_WARM, physicalDuty(warmDuty, full, fl.activeHigh));
   }
 }
+
+#ifdef FREEINK_FRONTLIGHT_LS
+void FrontlightManager::updateLsKeepAlive(const bool lit) {
+  // Refcounted, so strictly transition-edged: one +1 while lit, returned at 0.
+  // Skipped when the attach failed (see begin()) — the driver never took its
+  // +1 there, and RC_FAST keep-alive is moot without a working LS channel.
+  if (!_lsAttachOk || lit == _lsKeepAliveArmed) return;
+  esp_sleep_sub_mode_config(ESP_SLEEP_DIG_USE_RC_FAST_MODE, lit);
+  _lsKeepAliveArmed = lit;
+}
+#endif
 #endif
 
 void FrontlightManager::setBrightness(uint8_t percent) {
