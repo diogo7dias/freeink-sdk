@@ -275,8 +275,10 @@ polled, raw register reads + the reset/address dance, including the capacitive h
 key), and the **FT5x06 family** (Paper Mono's FT6336 — polled point reads gated on
 the active-low IRQ line). The InputManager exposes `hasTouch/isTouchPressed/wasTouchPressed/
 wasTouchReleased/getTouchPoint`; it delivers coordinates raw-panel-oriented and the
-app owns rotation. The GT911 boards set their `TouchConfig` in the board profile
-(e.g. `BoardConfig::LILYGO_T5_PRO_GT911`).
+app owns display-orientation mapping. GT911 additionally provides allocation-free
+multi-contact snapshots, completed 2-4 finger translation gestures, and completed
+two-finger rotations with a signed angle, center, and duration. The GT911 boards set
+their `TouchConfig` in the board profile (e.g. `BoardConfig::LILYGO_T5_PRO_GT911`).
 
 ## Build composition — devices × capabilities
 
