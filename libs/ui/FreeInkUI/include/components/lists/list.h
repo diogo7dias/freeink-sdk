@@ -35,6 +35,14 @@ enum class SelectionMarker : uint8_t {
 struct ListProps {
   const ListItem *items = nullptr;
   uint16_t count = 0;
+  // First absolute index items[0] corresponds to. Lets `items` be a small
+  // window around the viewport instead of an array of all `count` entries —
+  // a several-hundred-row list (an EPUB table of contents) would otherwise
+  // pin tens of KB of ListItems + label strings for rows that are never
+  // drawn. list() only touches indexes in [topIndex, topIndex + visible],
+  // so the caller must keep the window covering that range (refresh it after
+  // viewport changes, before list()). 0 = items is the full array.
+  uint16_t itemsWindowFirst = 0;
   // First item index drawn at the top of the rect. The list is virtualized:
   // only the rows that fully fit inside the rect are laid out, drawn, and
   // registered for interaction. Use listVisibleRows()/listTopIndexFor() to
@@ -367,7 +375,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   // repaint for them).
   Rect layoutRects[ListNav::MAX_ROW_RECTS];
   for (uint16_t i = top; i < props.count; ++i) {
-    const ListItem &item = props.items[i];
+    const ListItem &item = props.items[i - props.itemsWindowFirst];
     if (item.isHeader) {
       const int16_t pad = i != top ? props.sectionGap : 0;
       if (static_cast<int16_t>(cursorY + pad + headerH) > rowArea.bottom())
@@ -695,7 +703,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     const int16_t remainingH = static_cast<int16_t>(rowArea.bottom() - cursorY);
     if (partialIndex < props.count &&
         remainingH >= props.partialTrailingMinHeight) {
-      const ListItem &item = props.items[partialIndex];
+      const ListItem &item = props.items[partialIndex - props.itemsWindowFirst];
       if (!item.isHeader && item.label != nullptr && item.label[0] != '\0') {
         Rect row{rowArea.x, cursorY, rowArea.width, remainingH};
         StyleSet styles =

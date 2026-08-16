@@ -609,6 +609,41 @@ void testListClampsBadTopIndex() {
   CHECK_EQ(interactions.data()[3].value, 5);
 }
 
+// items can be a small window around the viewport (itemsWindowFirst) instead
+// of an array of all `count` entries; absolute indexing and interactions stay
+// identical to the full-array form.
+void testListItemsWindow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  // Window holds absolute rows 10..17 of a 100-row list.
+  ListItem window[8]{};
+  char labels[8][8];
+  for (int i = 0; i < 8; ++i) {
+    std::snprintf(labels[i], sizeof(labels[i]), "row%d", 10 + i);
+    window[i].label = labels[i];
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+    window[i].enabled = true;
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.count = 100;
+  props.topIndex = 12;
+  props.selectedIndex = 14;
+  props.action = 9;
+  props.rowHeight = 40;
+  list(frame, Rect{0, 0, 480, 200}, props); // fits 5 rows: absolute 12..16
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK_EQ(interactions.data()[0].value, 12);
+  CHECK_EQ(interactions.data()[4].value, 16);
+}
+
 void testListNavLayoutFeedback() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice();
@@ -3016,6 +3051,7 @@ int main() {
   testListHelpers();
   testListVirtualization();
   testListClampsBadTopIndex();
+  testListItemsWindow();
   testListNavLayoutFeedback();
   testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
