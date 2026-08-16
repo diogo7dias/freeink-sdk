@@ -167,29 +167,11 @@ struct ListNav {
     drawnRows = 0;
     followPending = false;
     rebuildNeeded = false;
-    rowRectCount = 0;
   }
 
   // Real rows per page once a build has run; the fixed-height estimate before.
   int pageRows() const { return drawnRows > 0 ? drawnRows : visibleRows; }
 
-  // Row rectangles the last build laid out, index-aligned to `top` (headers
-  // included). Bounded copy of list()'s per-build layout so callers can paint
-  // and refresh just the rows a selection change touched instead of the whole
-  // screen. Rows past the cap simply aren't tracked (rowRectFor returns
-  // false and the caller falls back to a full repaint).
-  static constexpr uint8_t MAX_ROW_RECTS = 16;
-  Rect rowRects[MAX_ROW_RECTS] = {};
-  uint8_t rowRectCount = 0;
-
-  // Rect of `index` from the last build, or false when the index wasn't
-  // drawn/tracked (off-page, past MAX_ROW_RECTS, or no build yet).
-  bool rowRectFor(const int index, Rect *out) const {
-    if (index < top || index >= top + static_cast<int>(rowRectCount))
-      return false;
-    *out = rowRects[index - top];
-    return true;
-  }
 
   // Layout feedback from list(): the effective top it drew from, how many
   // indexes fit, and whether the selected row was among them. When a pending
@@ -198,18 +180,10 @@ struct ListNav {
   // forward and a viewport starting at the selection always draws it, so the
   // rebuild loop converges.
   void onListRendered(const uint16_t effectiveTop, const int drawn,
-                      const bool selectedDrawn, const Rect *rects = nullptr,
-                      const uint8_t rectCount = 0) {
+                      const bool selectedDrawn) {
     top = effectiveTop;
     if (drawn > 0)
       drawnRows = drawn;
-    rowRectCount = 0;
-    if (rects != nullptr) {
-      const uint8_t n = rectCount < MAX_ROW_RECTS ? rectCount : MAX_ROW_RECTS;
-      for (uint8_t i = 0; i < n; ++i)
-        rowRects[i] = rects[i];
-      rowRectCount = n;
-    }
     if (!followPending)
       return;
     if (selectedDrawn || selected < top) {
@@ -370,21 +344,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   uint16_t drawnRows = 0;
   uint16_t consumedIndexes = 0; // item AND header indexes laid out from top
   bool selectedDrawn = false;
-  // Per-index layout rects reported back through props.nav (128 bytes stack;
-  // rows past the cap just aren't tracked — nav callers fall back to a full
-  // repaint for them).
-  Rect layoutRects[ListNav::MAX_ROW_RECTS];
   for (uint16_t i = top; i < props.count; ++i) {
     const ListItem &item = props.items[i - props.itemsWindowFirst];
     if (item.isHeader) {
       const int16_t pad = i != top ? props.sectionGap : 0;
       if (static_cast<int16_t>(cursorY + pad + headerH) > rowArea.bottom())
         break;
-      if (consumedIndexes < ListNav::MAX_ROW_RECTS) {
-        layoutRects[consumedIndexes] =
-            Rect{rowArea.x, static_cast<int16_t>(cursorY + pad), rowArea.width,
-                 headerH};
-      }
       ++consumedIndexes;
       cursorY = static_cast<int16_t>(cursorY + pad);
       Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
@@ -480,9 +445,6 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         drawnRows >= visible || i >= end)
       break;
     ++drawnRows;
-    if (consumedIndexes < ListNav::MAX_ROW_RECTS) {
-      layoutRects[consumedIndexes] = Rect{rowArea.x, cursorY, rowArea.width, itemH};
-    }
     ++consumedIndexes;
     if (props.selectedIndex == static_cast<int16_t>(i))
       selectedDrawn = true;
@@ -689,14 +651,8 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     }
   }
 
-  if (props.nav) {
-    const uint8_t trackedRects =
-        consumedIndexes < ListNav::MAX_ROW_RECTS
-            ? static_cast<uint8_t>(consumedIndexes)
-            : ListNav::MAX_ROW_RECTS;
-    props.nav->onListRendered(top, consumedIndexes, selectedDrawn, layoutRects,
-                              trackedRects);
-  }
+  if (props.nav)
+    props.nav->onListRendered(top, consumedIndexes, selectedDrawn);
 
   if (props.partialTrailingRow && overflows && visible > 0) {
     const uint16_t partialIndex = static_cast<uint16_t>(top + visible);

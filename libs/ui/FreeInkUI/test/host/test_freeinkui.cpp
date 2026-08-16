@@ -677,17 +677,6 @@ void testListNavLayoutFeedback() {
   CHECK(!nav.followPending); // selection drew; follow confirmed
   CHECK(!nav.rebuildNeeded);
 
-  // Row rects reported back, index-aligned to top (rows 8..12, 40px each).
-  CHECK_EQ(nav.rowRectCount, 5);
-  Rect rowRect{};
-  CHECK(nav.rowRectFor(8, &rowRect));
-  CHECK_EQ(rowRect.y, 0);
-  CHECK_EQ(rowRect.height, 40);
-  CHECK(nav.rowRectFor(12, &rowRect));
-  CHECK_EQ(rowRect.y, 160);
-  CHECK(!nav.rowRectFor(7, &rowRect));  // above the viewport
-  CHECK(!nav.rowRectFor(13, &rowRect)); // past the drawn range
-
   // Clipped selection: variable-height rows fit only 3 of the estimated 5,
   // ending short of the selection. The nav advances the viewport minimally
   // and requests a rebuild; the next pass that draws the selection settles.
