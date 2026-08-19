@@ -196,6 +196,9 @@ class SecureHttpClient {
     _status = 0;
     _body.clear();
     _responseHeaders.clear();
+    // Retained headers are a handful, so one reservation covers every response and the
+    // vector never reallocates mid-stream. clear() keeps the capacity between hops.
+    _responseHeaders.reserve(8);
     _contentLength = 0;
     _haveContentLength = false;
     _bodyComplete = false;
@@ -238,11 +241,16 @@ class SecureHttpClient {
         const size_t colon = line.find(':');
         if (colon == std::string::npos) continue;
         std::string name = line.substr(0, colon);
-        std::string value = line.substr(colon + 1);
-        while (!value.empty() && value.front() == ' ') value.erase(value.begin());
         std::transform(name.begin(), name.end(), name.begin(),
                        [](unsigned char c) { return static_cast<char>(tolower(c)); });
-        _responseHeaders.push_back(Header{name, value});
+        // A header nobody will read never becomes a std::string at all. The value is
+        // the long half of the line (signed URLs, cookies), so skipping it here is
+        // what keeps a thirty-header CDN response off an already tight heap.
+        const bool parsedHere = name == "content-length" || name == "transfer-encoding" || name == "connection";
+        if (!parsedHere && !retainsHeader(name)) continue;
+        std::string value = line.substr(colon + 1);
+        while (!value.empty() && value.front() == ' ') value.erase(value.begin());
+        if (retainsHeader(name)) _responseHeaders.push_back(Header{name, value});
         if (name == "content-length") {
           _contentLength = static_cast<size_t>(strtoul(value.c_str(), nullptr, 10));
           _haveContentLength = true;
@@ -314,9 +322,10 @@ class SecureHttpClient {
     return found == _responseHeaders.end() ? "" : found->value;
   }
 
-  // All response headers, in receive order, as (lowercased-name, value) pairs.
-  // Order-preserving and duplicate-preserving so callers can see every
-  // Set-Cookie (or other repeated header) rather than just the first.
+  // The retained response headers, in receive order, as (lowercased-name, value)
+  // pairs. Order-preserving and duplicate-preserving, so a caller that retains
+  // set-cookie sees every one of them rather than just the first. Headers outside
+  // the retained set were never stored; see setRetainedHeaders().
   std::vector<std::pair<std::string, std::string>> getHeaders() const {
     std::vector<std::pair<std::string, std::string>> out;
     out.reserve(_responseHeaders.size());
@@ -324,6 +333,21 @@ class SecureHttpClient {
                    [](const Header& h) { return std::make_pair(h.name, h.value); });
     return out;
   }
+
+  // Names whose values are kept for getHeader()/getHeaders(). Everything else is
+  // read off the socket, acted on if the client itself needs it, and dropped.
+  //
+  // Storing every header is what made a GitHub release download abort the
+  // firmware. One hop of that download answers with more than thirty headers
+  // (x-amz-*, set-cookie, referrer-policy, and the rest), each held as two
+  // std::strings, and growing the vector to hold them asked operator new for
+  // 3600 contiguous bytes while a wolfSSL session already owned the heap. The
+  // allocation threw, and this firmware builds without exceptions, so the throw
+  // went straight to abort().
+  //
+  // Names must be lowercase: response header names are lowercased before the
+  // comparison. Pass an empty list to retain every header, at that cost.
+  void setRetainedHeaders(std::vector<std::string> names) { _retainedHeaders = std::move(names); }
 
   static bool resolveUrl(const std::string& baseUrl, const std::string& location, std::string& resolved) {
     if (location.find("://") != std::string::npos) {
@@ -584,6 +608,17 @@ class SecureHttpClient {
   std::string _path;
   std::string _body;
   std::vector<Header> _responseHeaders;
+  // Defaults to what this client and its callers actually read back. content-length,
+  // transfer-encoding and connection are also parsed into their own fields while the
+  // headers stream past; they are retained so getHeader() still answers for them.
+  std::vector<std::string> _retainedHeaders{"location",   "content-length",   "transfer-encoding",
+                                            "connection", "www-authenticate", "retry-after"};
+
+  bool retainsHeader(const std::string& name) const {
+    if (_retainedHeaders.empty()) return true;
+    return std::find(_retainedHeaders.begin(), _retainedHeaders.end(), name) != _retainedHeaders.end();
+  }
+
   uint16_t _port = 0;
   int _status = 0;
   size_t _contentLength = 0;
