@@ -53,10 +53,14 @@ class FakeDrawTarget : public DrawTarget {
 
   Op ops[256]{};
   size_t opCount = 0;
+  mutable bool measuredForbiddenLabel = false;
+  bool drewForbiddenLabel = false;
   int16_t charWidth = 6;
   int16_t lineH = 12;
 
   Size measureText(FontId, const char* text, TextStyle) const override {
+    if (text != nullptr && std::strcmp(text, "must-not-measure") == 0)
+      measuredForbiddenLabel = true;
     return Size{static_cast<int16_t>(charWidth * static_cast<int16_t>(std::strlen(text))), lineH};
   }
   int16_t lineHeight(FontId) const override { return lineH; }
@@ -74,7 +78,9 @@ class FakeDrawTarget : public DrawTarget {
   void triangle(Point a, Point, Point c, Paint paint) override {
     record(Op::Triangle, Rect{a.x, a.y, static_cast<int16_t>(c.x - a.x), static_cast<int16_t>(c.y - a.y)}, paint);
   }
-  void text(Rect rect, const char*, TextStyle style) override {
+  void text(Rect rect, const char* text, TextStyle style) override {
+    if (text != nullptr && std::strcmp(text, "must-not-measure") == 0)
+      drewForbiddenLabel = true;
     record(Op::Text, rect, Paint::solid(style.color), 0, CornersAll, style.rotation);
   }
   void bitmap(Rect rect, BitmapRef, BitmapMode, Paint foreground, Rotation rotation) override {
@@ -632,6 +638,7 @@ void testListItemsWindow() {
   ListProps props;
   props.items = window;
   props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 8;
   props.count = 100;
   props.topIndex = 12;
   props.selectedIndex = 14;
@@ -642,6 +649,67 @@ void testListItemsWindow() {
   CHECK_EQ(interactions.count(), 5u);
   CHECK_EQ(interactions.data()[0].value, 12);
   CHECK_EQ(interactions.data()[4].value, 16);
+}
+
+// The virtual window only needs rows that can actually be drawn. In
+// particular, list() must not measure an extra row after the viewport is full:
+// callers often store exactly the visible window, so that read would be past
+// their ListItem array.
+void testListItemsWindowStopsBeforePastEndMeasurement() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  ListItem window[6]{};
+  for (int i = 0; i < 6; ++i) {
+    window[i].label = i == 5 ? "must-not-measure" : "row";
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 5;
+  props.count = 100;
+  props.topIndex = 10;
+  props.action = 9;
+  props.rowHeight = 19;
+  list(frame, Rect{0, 0, 480, 95}, props);  // exactly 5 visible rows
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK(!draw.measuredForbiddenLabel);
+  CHECK(!draw.drewForbiddenLabel);
+}
+
+void testListItemsWindowSkipsUnavailablePartialPreview() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  ListItem window[6]{};
+  for (int i = 0; i < 6; ++i) {
+    window[i].label = i == 5 ? "must-not-measure" : "row";
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 5;
+  props.count = 100;
+  props.topIndex = 10;
+  props.action = 9;
+  props.rowHeight = 20;
+  props.partialTrailingRow = true;
+  list(frame, Rect{0, 0, 480, 118}, props);  // five rows plus an 18px preview
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK(!draw.measuredForbiddenLabel);
+  CHECK(!draw.drewForbiddenLabel);
 }
 
 void testListNavLayoutFeedback() {
@@ -3041,6 +3109,8 @@ int main() {
   testListVirtualization();
   testListClampsBadTopIndex();
   testListItemsWindow();
+  testListItemsWindowStopsBeforePastEndMeasurement();
+  testListItemsWindowSkipsUnavailablePartialPreview();
   testListNavLayoutFeedback();
   testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
