@@ -2,7 +2,8 @@
 
 // UC8279 panel driver — Xteink X4 Pro production runs that ship an UltraChip
 // UC8279 (800x480) in place of the SSD1677. NOT the X3's UC8279d (792x528,
-// Uc8279Driver) — this variant has its own init (PSR 0x37/0x4D, PLL 0x0E, PFS),
+// Uc8279Driver) — this variant has its own init (vendor PSR 0x37/0x4D; FreeInk
+// writes 0x33, SHL flipped for framebuffer orientation), PLL 0x0E, PFS,
 // a 1-byte CDI, a 120-gate offset on the 600-gate scan, and an external-LUT AA
 // grayscale path with bitwise-INVERTED planes.
 //
@@ -11,8 +12,9 @@
 // VER (0x70) byte2 LUT_VER = 0x02 or 0x68 (0x69 reserved — routed here too, but
 // with no AA waveform of its own it uses the 0x68 table; built-in refreshes are
 // identical). The boot probe stores that byte in
-// BoardConfig::ACTIVE.displayControllerVariant. PENDING HARDWARE VALIDATION on
-// a UC8279 X4 Pro unit — no such panel has been on the bench yet.
+// BoardConfig::ACTIVE.displayControllerVariant. VALIDATED IN THE FIELD
+// (2026-08-19, LUT_VER=0x02 unit): detection, GC full, DU partial (PTL window
+// required — see displayStart), and orientation all confirmed on hardware.
 //
 // Same KW differential paradigm as the UC8179 sibling: DTM1 (0x10) = OLD plane,
 // DTM2 (0x13) = NEW plane, OTP waveforms for B/W (PSR REG=0 at refresh),
@@ -45,6 +47,10 @@ struct Uc8279X4Config {
   // drives the border; later AA refreshes hold it.
   uint8_t cdiAaFirst;
   uint8_t cdiAaLater;
+  // CDI for the built-in B/W paths — stock writes it on EVERY refresh (RE of
+  // the factory FW trigger fns): full/GC and windowed-partial values.
+  uint8_t cdiBwFull;
+  uint8_t cdiBwFast;
   // TRES (0x61) gate count: the panel is addressed 800x600 with 480 visible.
   uint16_t tresHeight;
   // First visible gate: the UC8279 scans 600 gates with the bonded 480 starting
@@ -92,10 +98,10 @@ class Uc8279X4Driver : public PanelDriver {
  private:
   void initController(EpdBus& bus);
   // Stream a framebuffer into a RAM plane: 0xFF padding for gates before the
-  // visible offset, mirror-Y row reversal over the visible rows (same orientation
-  // convention as the UC8179 sibling; mirror-X via the PSR SHL bit), then 0xFF
-  // padding to the addressed gate count. `invert` bitwise-inverts the image rows
-  // (AA planes only, per the vendor reference).
+  // visible offset, visible rows in the stock convention (forward order, bytes
+  // as-is; FREEINK_UC8279X4_ROWREV/XMIRROR can flip either axis for future
+  // sub-variants), then 0xFF padding to the addressed gate count. `invert`
+  // bitwise-inverts the image rows (AA planes only, per the vendor reference).
   void streamPlane(EpdBus& bus, uint8_t ramCmd, const uint8_t* fb, bool invert = false);
   void powerOnIfNeeded(EpdBus& bus, const char* tag);
 
