@@ -239,22 +239,6 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.waitBusy(" X3_PON");
     _isScreenOn = true;
   }
-  // The handshake below reads "waveform running" as BUSY LOW. If BUSY is ALREADY low
-  // when this refresh is issued -- the panel still finishing the previous pass -- the
-  // poll passes on that stale level, and displayFinish() then completes against the
-  // previous waveform instead of this one. This one is cut short, its pixels are only
-  // partly driven, and the frame underneath stays visible.
-  //
-  // Measured: the first FAST after a HALF ran 213 ms of waveform where an X3 FAST needs
-  // 566 ms, and the refresh before it reported more waveform time than it had wall clock
-  // -- the same milliseconds counted against the wrong pass. Requiring an idle panel
-  // first costs nothing when BUSY is already high, which is every ordinary page turn.
-  {
-    const int8_t busyPin = bus.pins().busy;
-    const unsigned long t0 = millis();
-    while (digitalRead(busyPin) == LOW && millis() - t0 < 1000) delay(1);
-  }
-
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform actually started (BUSY dropped LOW) before handing the
   // CPU back, so displayFinish()'s waitBusy() only rides out the second
