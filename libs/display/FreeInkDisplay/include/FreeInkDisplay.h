@@ -93,6 +93,9 @@ class FreeInkDisplay {
   static uint32_t refreshBusyMicros();      // waiting on BUSY while the panel drives
   // Refreshes handed back without their waveform being waited out. Should be zero.
   static uint32_t missedBusyAssertions();
+  // Bit set describing the last refresh's BUSY handshake. 0 = as designed. See
+  // PanelDriver::RefreshDiagnostic.
+  uint8_t lastRefreshDiagnostic() const;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif

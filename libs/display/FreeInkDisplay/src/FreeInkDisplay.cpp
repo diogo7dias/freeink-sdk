@@ -1001,6 +1001,10 @@ bool FreeInkDisplay::supportsFastTurbo() const { return _driver != nullptr && _d
 
 uint32_t FreeInkDisplay::missedBusyAssertions() { return EpdBus::missedBusyAssertions(); }
 
+uint8_t FreeInkDisplay::lastRefreshDiagnostic() const {
+  return _driver != nullptr ? _driver->lastRefreshDiagnostic() : 0;
+}
+
 void FreeInkDisplay::resetRefreshAccounting() { EpdBus::resetAccounting(); }
 uint32_t FreeInkDisplay::refreshTransferMicros() { return EpdBus::transferMicros(); }
 uint32_t FreeInkDisplay::refreshBusyMicros() { return EpdBus::busyMicros(); }

@@ -114,6 +114,12 @@ class Uc8253X3Driver : public PanelDriver {
   void triggerRefresh(EpdBus& bus, bool turnOff);
   void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
 
+ public:
+  uint8_t lastRefreshDiagnostic() const override { return _lastDiagnostic; }
+
+ private:
+  uint8_t _lastDiagnostic = 0;
+
   const Uc8253X3Config& _cfg;
 
   uint16_t _w;

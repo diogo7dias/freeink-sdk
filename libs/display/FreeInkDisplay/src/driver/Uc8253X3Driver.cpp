@@ -239,6 +239,11 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.waitBusy(" X3_PON");
     _isScreenOn = true;
   }
+  // Recorded, not acted on: the handshake below reads "waveform running" as BUSY low, so
+  // a panel that is ALREADY low here has not finished the previous pass and this refresh
+  // will complete against that one instead of its own.
+  _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowAtTrigger : 0;
+
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform actually started (BUSY dropped LOW) before handing the
   // CPU back, so displayFinish()'s waitBusy() only rides out the second
@@ -248,6 +253,7 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     const int8_t busyPin = bus.pins().busy;
     const unsigned long t0 = millis();
     while (digitalRead(busyPin) == HIGH && millis() - t0 < 50) delay(1);
+    if (digitalRead(busyPin) == HIGH) _lastDiagnostic |= kAssertionNotSeen;
   }
   _pendingTurnOff = turnOff;
   _pendingDoFullSync = doFullSync;

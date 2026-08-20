@@ -59,6 +59,16 @@ class PanelDriver {
   // request that reached nothing.
   virtual bool supportsFastTurbo() const { return false; }
 
+  // What the driver observed around the last refresh's BUSY handshake, as a bit set.
+  // Zero means the handshake behaved as designed. Non-zero is the evidence for a refresh
+  // that was triggered onto a panel still working, or handed back without its waveform
+  // being waited out. Diagnostic only: nothing branches on it.
+  enum RefreshDiagnostic : uint8_t {
+    kBusyLowAtTrigger = 1 << 0,   // panel still driving when this refresh was issued
+    kAssertionNotSeen = 1 << 1,   // BUSY never went low, so "running" was never confirmed
+  };
+  virtual uint8_t lastRefreshDiagnostic() const { return 0; }
+
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;
   virtual void deepSleep(EpdBus& bus) = 0;
