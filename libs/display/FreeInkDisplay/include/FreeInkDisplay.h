@@ -86,6 +86,7 @@ class FreeInkDisplay {
   // Static passthroughs, so a firmware that never touches the bus type can still ask.
   // Sticky: set once per screen, not per refresh. Inert on panels with one fast path.
   void setFastQuality(FastQuality quality);
+  bool supportsFastTurbo() const;
 
   static void resetRefreshAccounting();
   static uint32_t refreshTransferMicros();  // streaming the frame into controller RAM

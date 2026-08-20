@@ -80,6 +80,7 @@ class Ssd1677Driver : public PanelDriver {
   void deepSleep(EpdBus& bus) override;
 
   void setFastQuality(FastQuality quality) override { _fastQuality = quality; }
+  bool supportsFastTurbo() const override { return _cfg.allowFastTurbo; }
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   // Deferred refresh: displayStart() runs the full update (RAM writes,
   // MASTER_ACTIVATION) and returns while the waveform runs; displayFinish()

@@ -79,6 +79,18 @@ void Uc8253X3Driver::loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const 
   loadBank(bus, bank);
 }
 
+// The vendor's no-op settle: re-display the frame that is already on the panel through
+// the differential bank, then restore DTM1. The first differential after a full sync
+// garbles without it. Blocking, and a whole waveform (~620 ms measured on lector), which
+// is why where it runs matters as much as that it runs.
+void Uc8253X3Driver::runPostFullSettle(EpdBus& bus, const uint8_t* fb) {
+  loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
+  bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
+  triggerRefresh(bus, false);
+  bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
+  bus.cmd(CMD_DATA_STOP);
+}
+
 void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
   if (!_isScreenOn) {
     bus.cmd(CMD_POWER_ON);
@@ -176,14 +188,15 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   const bool halfMode = (mode == RefreshMode::Half);
   // Pay the settle owed by an earlier full sync, now that a differential is genuinely
   // about to run. Anything else re-syncs by itself, so the debt is simply dropped.
+  //
+  // Only reachable with eagerPostFullSettle off. Running a whole extra refresh here puts
+  // two waveforms inside one displayStart(), and the single BUSY handshake below then
+  // completes against the settle rather than against the page, leaving the page
+  // half-driven. See Uc8253X3Config::eagerPostFullSettle.
   if (_settleOwedBeforeNextDiff) {
     _settleOwedBeforeNextDiff = false;
     if (fastMode && _redRamSynced) {
-      loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
-      bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
-      triggerRefresh(bus, false);
-      bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
-      bus.cmd(CMD_DATA_STOP);
+      runPostFullSettle(bus, fb);
     }
   }
   const bool forcedFullSync = _forceFullSyncNext;
@@ -306,15 +319,20 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // next refresh is a Fast one. A full or half re-syncs on its own, and a power-down ends
   // the frame's life entirely — the common case at sleep, where this pass used to be pure
   // cost on the way out the door.
-  if (doFullSync && !turnOff) {
-    _settleOwedBeforeNextDiff = true;
-  }
+  const bool settleDue = doFullSync && !turnOff;
+  // Eager: paid here and now, while the panel is already awake and the caller is already
+  // waiting on a slow pass, so displayStart() never runs more than one refresh.
+  // Lazy: recorded and paid on the next differential (the old behaviour).
+  _settleOwedBeforeNextDiff = settleDue && !_cfg.eagerPostFullSettle;
 
   if (doFullSync && _initialFullSyncsRemaining > 0) {
     _initialFullSyncsRemaining--;
   }
   _forceFullSyncNext = false;
   _forcedConditionPassesNext = 0;
+
+  // Last, so the state above is already settled: this runs a whole waveform of its own.
+  if (settleDue && _cfg.eagerPostFullSettle) runPostFullSettle(bus, fb);
 }
 
 void Uc8253X3Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {

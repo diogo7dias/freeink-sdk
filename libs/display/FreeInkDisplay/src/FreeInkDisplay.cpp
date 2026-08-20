@@ -997,6 +997,8 @@ void FreeInkDisplay::setFastQuality(const FastQuality quality) {
   _driver->setFastQuality(quality == FAST_TURBO ? freeink::FastQuality::Turbo : freeink::FastQuality::Standard);
 }
 
+bool FreeInkDisplay::supportsFastTurbo() const { return _driver != nullptr && _driver->supportsFastTurbo(); }
+
 void FreeInkDisplay::resetRefreshAccounting() { EpdBus::resetAccounting(); }
 uint32_t FreeInkDisplay::refreshTransferMicros() { return EpdBus::transferMicros(); }
 uint32_t FreeInkDisplay::refreshBusyMicros() { return EpdBus::busyMicros(); }

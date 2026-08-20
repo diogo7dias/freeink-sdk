@@ -54,6 +54,10 @@ class PanelDriver {
   // no-op, so a driver with only one fast path is unaffected and a caller can
   // always ask.
   virtual void setFastQuality(FastQuality quality) { (void)quality; }
+  // Whether Turbo means anything on this driver and board. False everywhere the request
+  // is silently ignored, so a host reporting what a refresh ran does not report a
+  // request that reached nothing.
+  virtual bool supportsFastTurbo() const { return false; }
 
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;

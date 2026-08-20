@@ -44,6 +44,21 @@ struct Uc8253X3Config {
   // initController() so a board can tune it without forking the driver. 0x09 is the value
   // this driver has always sent.
   uint8_t pll;
+  // Run the post-full-sync settle at the END of the full sync rather than at the start of
+  // the next differential. Same waveform either way; only the timing moves.
+  //
+  // Paying it lazily put TWO refreshes inside one displayStart(): the settle, and then the
+  // page the user actually asked for. displayStart() hands off to displayFinish() through
+  // a single BUSY handshake, and after the settle's trigger BUSY is still low, so the
+  // handshake completed against the settle and the page's own waveform was never waited
+  // out. The page turn after any clean was left half-driven, showing the previous layout
+  // underneath the new one. Paying it here keeps displayStart() to exactly one refresh.
+  //
+  // The settle's cost (~620 ms) moves onto the clean that owed it, which is already the
+  // slow pass, instead of onto the next page turn, which is the one being watched.
+  //
+  // Appended at the end for the same reason `pll` is.
+  bool eagerPostFullSettle = true;
 };
 
 const Uc8253X3Config& uc8253X3DefaultConfig();
@@ -97,6 +112,7 @@ class Uc8253X3Driver : public PanelDriver {
   void loadBank(EpdBus& bus, const Uc8253LutBank& bank);
   void loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const Uc8253LutBank& bank);
   void triggerRefresh(EpdBus& bus, bool turnOff);
+  void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
 
   const Uc8253X3Config& _cfg;
 
