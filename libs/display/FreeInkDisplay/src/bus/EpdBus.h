@@ -112,7 +112,49 @@ class EpdBus {
   uint32_t spiHz() const { return _spiHz; }
   BusyPolarity busyPolarity() const { return _busy; }
 
+  // Per-refresh accounting, for a host firmware's timing readout.
+  //
+  // A refresh is wire time (streaming a framebuffer into controller RAM), plus waveform
+  // time (waiting on BUSY while the panel drives), plus whatever host work surrounds them.
+  // Those three have nothing in common as problems: the first is answered by the SPI
+  // clock or by writing fewer bytes, the second only by a different waveform, the third by
+  // doing less per frame. A single elapsed total cannot tell them apart, and guessing
+  // wrong means tuning a waveform to fix a bus problem.
+  //
+  // Static because exactly one panel bus is live at a time and the caller wants the totals
+  // for one display() call, not for a bus object the firmware never holds. Costs two
+  // micros() reads per transaction.
+  static void resetAccounting() {
+    _transferUs = 0;
+    _busyUs = 0;
+  }
+  // Microseconds inside SPI transactions since the last resetAccounting().
+  static uint32_t transferMicros() { return _transferUs; }
+  // Microseconds spent waiting on the BUSY line since the last resetAccounting().
+  static uint32_t busyMicros() { return _busyUs; }
+
  private:
+  // See resetAccounting(). Plain uint32_t: only ever written by the task driving the
+  // panel, and a wrap after ~71 minutes of transactions cannot happen inside one refresh.
+  static uint32_t _transferUs;
+  static uint32_t _busyUs;
+  // Open beginTxn()'s clock, closed by the matching endTxn().
+  uint32_t _txnStartUs = 0;
+
+  // Adds its lifetime to one of the counters above. Scope-based so an early return inside
+  // a transfer cannot silently drop the time it took.
+  class Accumulate {
+   public:
+    explicit Accumulate(uint32_t& sink) : _sink(sink), _start(micros()) {}
+    ~Accumulate() { _sink += micros() - _start; }
+    Accumulate(const Accumulate&) = delete;
+    Accumulate& operator=(const Accumulate&) = delete;
+
+   private:
+    uint32_t& _sink;
+    uint32_t _start;
+  };
+
   // Busy-wait hooks (see setBusyWaitHooks / setBusyWaitSliceHook)
   static constexpr unsigned long BUSY_WAIT_HOOK_THRESHOLD_MS = 20;
   void (*_busyWaitBeginHook)() = nullptr;

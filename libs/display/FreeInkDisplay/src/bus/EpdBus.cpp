@@ -44,6 +44,10 @@ void boardEpdReset(bool high) {
 
 namespace freeink {
 
+// Per-refresh accounting counters; see EpdBus::resetAccounting().
+uint32_t EpdBus::_transferUs = 0;
+uint32_t EpdBus::_busyUs = 0;
+
 // ── ISR-driven waveform-completion notification ──────────────────────────────
 // A single binary semaphore, shared between the BUSY-pin GPIO ISR and
 // waitRefreshComplete(). The ISR is attached only for the duration of one
@@ -128,6 +132,7 @@ void EpdBus::reset(uint16_t extraSettleMs) {
 }
 
 void EpdBus::cmd(uint8_t c) {
+  const Accumulate timed(_transferUs);
   SPI.beginTransaction(_spi);
   digitalWrite(_pins.dc, LOW);
   digitalWrite(_pins.cs, LOW);
@@ -137,6 +142,7 @@ void EpdBus::cmd(uint8_t c) {
 }
 
 void EpdBus::data(uint8_t d) {
+  const Accumulate timed(_transferUs);
   SPI.beginTransaction(_spi);
   digitalWrite(_pins.dc, HIGH);
   digitalWrite(_pins.cs, LOW);
@@ -146,6 +152,7 @@ void EpdBus::data(uint8_t d) {
 }
 
 void EpdBus::data(const uint8_t* d, uint16_t len) {
+  const Accumulate timed(_transferUs);
   SPI.beginTransaction(_spi);
   digitalWrite(_pins.dc, HIGH);
   digitalWrite(_pins.cs, LOW);
@@ -155,6 +162,7 @@ void EpdBus::data(const uint8_t* d, uint16_t len) {
 }
 
 void EpdBus::cmdData(uint8_t c, const uint8_t* d, uint16_t len) {
+  const Accumulate timed(_transferUs);
   SPI.beginTransaction(_spi);
   digitalWrite(_pins.cs, LOW);
   digitalWrite(_pins.dc, LOW);
@@ -173,6 +181,10 @@ void EpdBus::cmdData2(uint8_t c, uint8_t d0, uint8_t d1) {
 }
 
 void EpdBus::beginTxn() {
+  // Timed as a pair with endTxn() rather than per raw write: the bulk plane streamers
+  // (sendPlaneFlipped, fillPlane) hold one CS-low burst across the whole framebuffer, and
+  // that burst is the wire time worth attributing.
+  _txnStartUs = micros();
   if (_coCs >= 0) {
     digitalWrite(_coCs, HIGH);
   }
@@ -183,6 +195,7 @@ void EpdBus::beginTxn() {
 void EpdBus::endTxn() {
   digitalWrite(_pins.cs, HIGH);
   SPI.endTransaction();
+  _transferUs += micros() - _txnStartUs;
 }
 
 void EpdBus::rawCmd(uint8_t c) {
@@ -204,6 +217,7 @@ void EpdBus::rawWriteBytes(const uint8_t* d, uint16_t len) {
 void EpdBus::waitBusy(const char* tag) { waitBusy(_busy, tag); }
 
 void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
+  const Accumulate timed(_busyUs);
   const unsigned long start = millis();
   // Both hooks engage lazily, only once the wait has proven long (see
   // setBusyWaitHooks). longWait gates the slice hook independently of the
@@ -299,7 +313,7 @@ void EpdBus::waitRefreshComplete(const char* tag) {
   // same one-tick/idle-HIGH rule for refresh completion so a missed assertion
   // edge can never make the caller write RAM while the waveform is still busy.
   if (_busy == BusyPolarity::UcIdleHigh) {
-    waitBusy(_busy, tag);
+    waitBusy(_busy, tag);  // accounts for its own time
     return;
   }
   // A host that installed a busy-wait slice hook (e.g. CrossPoint light-sleeping
@@ -322,6 +336,11 @@ void EpdBus::waitRefreshComplete(const char* tag) {
     waitBusy(tag);
     return;
   }
+  // Below this point the wait is served here rather than delegated to waitBusy(), so this
+  // is where it is accounted for. Placed after the three fall-back returns above so a
+  // delegated wait is counted once, by waitBusy(), and not twice.
+  const Accumulate timed(_busyUs);
+
   // Levels by polarity. CHANGE is armed so both the delayed BUSY assertion and
   // its completion are event-driven; the task never polls during either phase.
   const bool activeHigh = (_busy == BusyPolarity::ActiveHigh);

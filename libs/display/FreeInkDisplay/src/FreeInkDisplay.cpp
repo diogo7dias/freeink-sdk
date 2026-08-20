@@ -991,4 +991,9 @@ void FreeInkDisplay::saveFrameBufferAsPBM(const char* filename) {
 #endif
 }
 
+
+void FreeInkDisplay::resetRefreshAccounting() { EpdBus::resetAccounting(); }
+uint32_t FreeInkDisplay::refreshTransferMicros() { return EpdBus::transferMicros(); }
+uint32_t FreeInkDisplay::refreshBusyMicros() { return EpdBus::busyMicros(); }
+
 }  // namespace freeink

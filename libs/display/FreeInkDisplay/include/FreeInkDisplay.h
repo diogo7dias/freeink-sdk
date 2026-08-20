@@ -75,6 +75,14 @@ class FreeInkDisplay {
   void setInverted(bool inverted);
   bool toggleInverted();
   bool isInverted() const { return _inverted; }
+
+  // Where one refresh's milliseconds went. Reset before a display call, read after: the
+  // difference between the wall-clock total and these two is host work, and each of the
+  // three has a different fix. See EpdBus::resetAccounting() for the full reasoning.
+  // Static passthroughs, so a firmware that never touches the bus type can still ask.
+  static void resetRefreshAccounting();
+  static uint32_t refreshTransferMicros();  // streaming the frame into controller RAM
+  static uint32_t refreshBusyMicros();      // waiting on BUSY while the panel drives
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif
