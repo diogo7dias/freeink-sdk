@@ -665,8 +665,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   if (props.nav)
     props.nav->onListRendered(top, consumedIndexes, selectedDrawn);
 
-  if (props.partialTrailingRow && overflows && visible > 0) {
-    const uint16_t partialIndex = static_cast<uint16_t>(top + visible);
+  if (props.partialTrailingRow && visible > 0) {
+    // First index the loop above did NOT lay out. With wrapped rows fewer
+    // indexes fit than the fixed-height `visible` estimate, so top + visible
+    // would preview an item past the real next one (skipping the rows in
+    // between — pressing Next then selects a different item than previewed).
+    const uint16_t partialIndex = static_cast<uint16_t>(top + consumedIndexes);
     const int16_t remainingH = static_cast<int16_t>(rowArea.bottom() - cursorY);
     if (partialIndex < props.count && partialIndex >= props.itemsWindowFirst &&
         (props.itemsWindowCount == 0 || partialIndex - props.itemsWindowFirst < props.itemsWindowCount) &&
