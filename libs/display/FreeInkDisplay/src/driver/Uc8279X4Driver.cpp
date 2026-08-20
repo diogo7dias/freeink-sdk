@@ -89,8 +89,7 @@ const Uc8279X4Config& uc8279X4DefaultConfig() {
       0x02,  // ccset (0xE0)
       0x1E,  // tsset (0xE5) full refresh
       0x5A,  // tssetFast (0xE5) fast/partial refresh
-      0x97,  // cdiAaFirst (0x50, 1 byte): first AA refresh, border driven, DDX=1
-      0xD7,  // cdiAaLater (0x50, 1 byte): later AA refreshes, border held
+      0x97,  // cdiAa (0x50, 1 byte): constant on EVERY AA refresh, per stock
       0x97,  // cdiBwFull (0x50): stock writes it before every GC/full refresh
       0xD7,  // cdiBwFast (0x50): stock value for the windowed partial
       600,   // tresHeight — addressed 800x600 (480 visible)
@@ -144,7 +143,6 @@ void Uc8279X4Driver::initController(EpdBus& bus) {
   bus.data(_cfg.gateScan);
 
   _isScreenOn = false;
-  _grayRefreshedOnce = false;
 }
 
 void Uc8279X4Driver::begin(EpdBus& bus) {
@@ -328,13 +326,20 @@ void Uc8279X4Driver::deepSleep(EpdBus& bus) {
 
 // --- 4-level grayscale (anti-aliasing) --------------------------------------
 // AA plane order is the reverse of the built-in 4-gray order: plane0/LSB -> 0x10,
-// plane1/MSB -> 0x13, and BOTH planes are bitwise-inverted on this controller.
+// plane1/MSB -> 0x13. NOT inverted, unlike stock: stock inverts because ITS
+// planes are ABSOLUTE (white=(1,1)); the SDK consumer's planes are DELTA-encoded
+// (white AND black = (0,0), only greys flagged — the hardware-proven UC8179
+// arrangement). Inverting delta planes sent white through stock's black-drive
+// waveform bucket, washing the background gray on every AA refresh
+// (field-confirmed on the first UC8279 unit). Non-inverted, white/black land in
+// the gentle WW hold bucket, dark grey (1,1) in the strong-drive table, light
+// grey (0,1) in the mid-drive table.
 void Uc8279X4Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
-  if (lsb) streamPlane(bus, CMD_DTM1, lsb, /*invert=*/true);
+  if (lsb) streamPlane(bus, CMD_DTM1, lsb, /*invert=*/false);
 }
 
 void Uc8279X4Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
-  if (msb) streamPlane(bus, CMD_DTM2, msb, /*invert=*/true);
+  if (msb) streamPlane(bus, CMD_DTM2, msb, /*invert=*/false);
 }
 
 void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
@@ -343,7 +348,7 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   (void)factoryMode;  // 4-level is absolute (defined by the planes)
 
   // Vendor AA sequence: PSR (REG=1) -> [planes already in RAM via
-  // copyGrayscale*] -> 5x49 LUTs -> CDI (first/later) -> PON -> PSR rewrite ->
+  // copyGrayscale*] -> 5x49 LUTs -> CDI (constant 0x97) -> PON -> PSR rewrite ->
   // DRF. No CCSET/TSSET writes on this path.
   bus.cmd(CMD_PANEL_SETTING);
   bus.data(_cfg.psr0);  // 0x33: REG=1, external LUT
@@ -354,8 +359,7 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
     bus.data(luts[i].data, GRAY_LUT_LEN);
   }
   bus.cmd(CMD_VCOM_DATA_INTERVAL);
-  bus.data(_grayRefreshedOnce ? _cfg.cdiAaLater : _cfg.cdiAaFirst);  // first 0x97, later 0xD7
-  _grayRefreshedOnce = true;
+  bus.data(_cfg.cdiAa);  // constant 0x97 every AA refresh (stock; no first/later split)
 
   powerOnIfNeeded(bus, " 8279x4_gray_PON");
 

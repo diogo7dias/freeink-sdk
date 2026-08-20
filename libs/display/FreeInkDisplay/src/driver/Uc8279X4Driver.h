@@ -2,10 +2,10 @@
 
 // UC8279 panel driver — Xteink X4 Pro production runs that ship an UltraChip
 // UC8279 (800x480) in place of the SSD1677. NOT the X3's UC8279d (792x528,
-// Uc8279Driver) — this variant has its own init (vendor PSR 0x37/0x4D; FreeInk
-// writes 0x33, SHL flipped for framebuffer orientation), PLL 0x0E, PFS,
-// a 1-byte CDI, a 120-gate offset on the 600-gate scan, and an external-LUT AA
-// grayscale path with bitwise-INVERTED planes.
+// Uc8279Driver) — this variant has its own init (PSR 0x37/0x4D, stock-exact;
+// PSR must be rewritten AFTER PON to latch), PLL 0x0E, PFS, a 1-byte CDI,
+// a 120-gate offset on the 600-gate scan, and an external-LUT AA grayscale
+// path with bitwise-INVERTED planes.
 //
 // Register sequences, waveform tables, and power ordering come from the Xteink
 // X4 Pro 480x800 display hardware reference (vendor R&D doc). Identification:
@@ -43,10 +43,11 @@ struct Uc8279X4Config {
   uint8_t tsset;
   // TSSET (cmd 0xE5) for a fast/partial refresh.
   uint8_t tssetFast;
-  // CDI (0x50) — SINGLE byte on this controller. First AA refresh after init
-  // drives the border; later AA refreshes hold it.
-  uint8_t cdiAaFirst;
-  uint8_t cdiAaLater;
+  // CDI (0x50) — SINGLE byte on this controller. Stock sends the SAME value on
+  // every AA refresh (Factory.bin RE: both vtable CDI getters hard-return 0x97;
+  // there is NO first/later split — an earlier split to 0xD7 on later refreshes
+  // grayed the background, same class of bug as the UC8179 CDI regression).
+  uint8_t cdiAa;
   // CDI for the built-in B/W paths — stock writes it on EVERY refresh (RE of
   // the factory FW trigger fns): full/GC and windowed-partial values.
   uint8_t cdiBwFull;
@@ -85,11 +86,12 @@ class Uc8279X4Driver : public PanelDriver {
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
   // --- 4-level grayscale (anti-aliasing) ---
-  // External-LUT path per the vendor reference: both planes bitwise-INVERTED
-  // (plane0/LSB -> 0x10, plane1/MSB -> 0x13 — the reverse of the built-in 4-gray
-  // order), 5x49 LUTs whose bytes depend on the LUT_VER variant (0x02 vs 0x68),
-  // single-byte CDI (first/later), PSR rewritten before DRF, and the panel LEFT
-  // POWERED between AA page refreshes (vendor production behavior).
+  // External-LUT path: plane0/LSB -> 0x10, plane1/MSB -> 0x13 (the reverse of
+  // the built-in 4-gray order), sent NON-inverted — stock inverts only because
+  // its planes are absolute-encoded; the SDK's delta planes must not be (see
+  // copyGrayscaleLsb). 5x49 LUTs whose bytes depend on the LUT_VER variant
+  // (0x02 vs 0x68), single-byte CDI (constant 0x97), PSR rewritten before DRF,
+  // and the panel LEFT POWERED between AA page refreshes (vendor behavior).
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
   void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
@@ -124,9 +126,6 @@ class Uc8279X4Driver : public PanelDriver {
   // ~newframe), scrubbing the residue with a cheap DU (no GC flash) — the same
   // trick as _darkBackground, applied once after AA.
   bool _redriveAfterGray = false;
-  // AA CDI select: first grayscale refresh after init sends cdiAaFirst, later
-  // ones cdiAaLater (border hold), per the vendor reference.
-  bool _grayRefreshedOnce = false;
 
   // Async split state (see Uc8179Driver for the contract).
   bool _pendingRefresh = false;
