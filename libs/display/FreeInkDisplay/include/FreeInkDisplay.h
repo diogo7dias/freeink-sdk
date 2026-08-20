@@ -29,6 +29,10 @@ class FreeInkDisplay {
 
   // Refresh modes (public contract — full / balanced-half / fast).
   enum RefreshMode { FULL_REFRESH, HALF_REFRESH, FAST_REFRESH };
+  // How hard a FAST refresh should try. TURBO asks the active driver for its
+  // cheapest partial path; drivers and boards without one ignore it, so a caller
+  // may always ask. See PanelDriver::setFastQuality.
+  enum FastQuality { FAST_STANDARD, FAST_TURBO };
 
   // Select panel geometry/controller before begin().
   void setDisplayX3();
@@ -80,6 +84,9 @@ class FreeInkDisplay {
   // difference between the wall-clock total and these two is host work, and each of the
   // three has a different fix. See EpdBus::resetAccounting() for the full reasoning.
   // Static passthroughs, so a firmware that never touches the bus type can still ask.
+  // Sticky: set once per screen, not per refresh. Inert on panels with one fast path.
+  void setFastQuality(FastQuality quality);
+
   static void resetRefreshAccounting();
   static uint32_t refreshTransferMicros();  // streaming the frame into controller RAM
   static uint32_t refreshBusyMicros();      // waiting on BUSY while the panel drives

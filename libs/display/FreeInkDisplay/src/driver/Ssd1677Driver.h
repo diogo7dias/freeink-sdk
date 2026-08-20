@@ -53,6 +53,14 @@ struct Ssd1677Config {
   // collapsing toward B/W). The X4 keeps the panel powered between fast
   // refreshes, so it never needs this and keeps stock behavior.
   bool grayPowerUpFirst = false;
+  // Opt in to FastQuality::Turbo on this board. Turbo drops fastSeqOverride for the
+  // pass and takes the driver's incremental CTRL2=0x1C differential path instead,
+  // which is the same thing fastDuRefreshShortcut() does at compile time but chosen
+  // per refresh so the firmware can back out without a reflash. Left false so a board
+  // that has not been validated on 0x1C (where it can silently promote to the full
+  // waveform) cannot be switched onto it by a caller. Appended at the END of the
+  // struct on purpose: the configs above are positional initialisers.
+  bool allowFastTurbo = false;
 };
 
 // Standard config (Xteink X4 / GDEQ0426T82). Panel mounting (mirror/180°) is NOT
@@ -71,6 +79,7 @@ class Ssd1677Driver : public PanelDriver {
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
+  void setFastQuality(FastQuality quality) override { _fastQuality = quality; }
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   // Deferred refresh: displayStart() runs the full update (RAM writes,
   // MASTER_ACTIVATION) and returns while the waveform runs; displayFinish()
@@ -141,6 +150,9 @@ class Ssd1677Driver : public PanelDriver {
   // a clean differential baseline. Only armed for boards whose self-powering fast
   // sequence makes _isScreenOn useless as a cold-start signal (fullSeqOverride set).
   bool _needsInitialFull = false;
+  // What the host last asked for. Honoured only where the config opted in and the
+  // pass is eligible; see refresh().
+  FastQuality _fastQuality = FastQuality::Standard;
 };
 
 // Singleton accessor (Meyers, zero-heap). Selects the config for the active board.

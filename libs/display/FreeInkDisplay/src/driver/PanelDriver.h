@@ -21,6 +21,12 @@ namespace freeink {
 enum class RefreshMode : uint8_t { Full, Half, Fast };
 enum class GrayPlane : uint8_t { Lsb, Msb };
 
+// How hard a FAST refresh should try. Standard is whatever the board's config says
+// (for the X4, the vendor's absolute partial sequence). Turbo asks the driver for its
+// cheapest partial path where it has one and the board has opted in; drivers and
+// boards without one ignore the request entirely, so a caller can always ask.
+enum class FastQuality : uint8_t { Standard, Turbo };
+
 struct PanelGeometry {
   uint16_t width;
   uint16_t height;
@@ -43,6 +49,11 @@ class PanelDriver {
   // display hardware (e.g. M5GFX, EPD_Painter). When true the facade does NOT
   // bring up its EpdBus — the driver owns the panel end to end.
   virtual bool usesExternalBus() const { return false; }
+
+  // Choose between the board's standard FAST path and its cheapest one. Default
+  // no-op, so a driver with only one fast path is unaffected and a caller can
+  // always ask.
+  virtual void setFastQuality(FastQuality quality) { (void)quality; }
 
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;

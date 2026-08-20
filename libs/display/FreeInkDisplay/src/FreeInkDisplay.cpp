@@ -992,6 +992,11 @@ void FreeInkDisplay::saveFrameBufferAsPBM(const char* filename) {
 }
 
 
+void FreeInkDisplay::setFastQuality(const FastQuality quality) {
+  if (_driver == nullptr) return;
+  _driver->setFastQuality(quality == FAST_TURBO ? freeink::FastQuality::Turbo : freeink::FastQuality::Standard);
+}
+
 void FreeInkDisplay::resetRefreshAccounting() { EpdBus::resetAccounting(); }
 uint32_t FreeInkDisplay::refreshTransferMicros() { return EpdBus::transferMicros(); }
 uint32_t FreeInkDisplay::refreshBusyMicros() { return EpdBus::busyMicros(); }

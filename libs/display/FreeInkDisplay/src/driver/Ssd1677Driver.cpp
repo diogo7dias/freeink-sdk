@@ -273,7 +273,16 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
   // doesn't trigger some panels' DU waveform (they then run the full waveform on
   // every "fast" refresh); these values fix that. Skipped while a custom grayscale
   // LUT is active (that path needs the 0x0C sequence with the loaded LUT).
-  const uint8_t seqOverride = (mode == RefreshMode::Fast) ? _cfg.fastSeqOverride
+  //
+  // Turbo drops the fast override for this pass, which falls through to the
+  // incremental CTRL2=0x1C assembly below (~77 ms against the 0xFC sequence's
+  // ~505 ms measured on the X4). Only where the board opted in, and never on
+  // inverted content: the DU compare idles unchanged pixels, and _darkBackground
+  // already needs its complement-RED corrective to stay clean, so it gets the
+  // absolute sequence rather than the cheapest one.
+  const bool turboThisPass = _fastQuality == FastQuality::Turbo && _cfg.allowFastTurbo && !_darkBackground;
+  const uint8_t fastSeq = (mode == RefreshMode::Fast && turboThisPass) ? 0 : _cfg.fastSeqOverride;
+  const uint8_t seqOverride = (mode == RefreshMode::Fast) ? fastSeq
                               : (mode == RefreshMode::Half && _cfg.halfSeqOverride != 0)
                                   ? _cfg.halfSeqOverride
                                   : _cfg.fullSeqOverride;
@@ -313,6 +322,16 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
                    seqOverride);
 #endif
     return;
+  }
+
+  // The absolute-sequence branch above re-writes the border every pass so it tracks
+  // the refresh mode. Reaching the incremental path for a FAST because Turbo dropped
+  // the override must not lose that: the previous HALF or FULL left the full-refresh
+  // border loaded, and a partial run with a full border drives a black ring around
+  // the page.
+  if (mode == RefreshMode::Fast && _cfg.borderWaveformFast != 0) {
+    bus.cmd(CMD_BORDER_WAVEFORM);
+    bus.data(_cfg.borderWaveformFast);
   }
 
   uint8_t displayMode = 0x00;
