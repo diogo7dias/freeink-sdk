@@ -47,6 +47,7 @@ namespace freeink {
 // Per-refresh accounting counters; see EpdBus::resetAccounting().
 uint32_t EpdBus::_transferUs = 0;
 uint32_t EpdBus::_busyUs = 0;
+uint32_t EpdBus::_missedBusyAsserts = 0;
 
 // ── ISR-driven waveform-completion notification ──────────────────────────────
 // A single binary semaphore, shared between the BUSY-pin GPIO ISR and
@@ -358,6 +359,20 @@ void EpdBus::waitRefreshComplete(const char* tag) {
     // command was a no-op or its entire pulse completed before we armed.
     if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(20)) != pdTRUE) {
       detachInterrupt(digitalPinToInterrupt(_pins.busy));
+      // A panel that has not asserted BUSY 20 ms after MASTER_ACTIVATION has not
+      // necessarily finished -- on the X3 it may simply be slow to assert, and returning
+      // here hands the caller a refresh that is still running. The next pass then writes
+      // RAM and triggers on top of a live waveform, so the frame is only partly driven
+      // and the one underneath stays visible.
+      //
+      // Two-phase panels get the polling wait instead, which allows a full second for the
+      // assertion and then waits the waveform out properly. Counted either way, because
+      // "this never happens" was the assumption that made the 20 ms giveaway look safe.
+      _missedBusyAsserts++;
+      if (_busy == BusyPolarity::X3TwoPhase) {
+        const Accumulate timed(_busyUs);
+        waitBusy(_busy, tag);
+      }
       return;
     }
     sawWorking = digitalRead(_pins.busy) == workingLevel;

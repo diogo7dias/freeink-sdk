@@ -91,6 +91,8 @@ class FreeInkDisplay {
   static void resetRefreshAccounting();
   static uint32_t refreshTransferMicros();  // streaming the frame into controller RAM
   static uint32_t refreshBusyMicros();      // waiting on BUSY while the panel drives
+  // Refreshes handed back without their waveform being waited out. Should be zero.
+  static uint32_t missedBusyAssertions();
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif

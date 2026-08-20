@@ -132,12 +132,18 @@ class EpdBus {
   static uint32_t transferMicros() { return _transferUs; }
   // Microseconds spent waiting on the BUSY line since the last resetAccounting().
   static uint32_t busyMicros() { return _busyUs; }
+  // How many times waitRefreshComplete() gave up on a BUSY assertion that never came.
+  // Should be zero: anything else is a refresh handed back while the panel was still
+  // driving it, which the next pass then writes RAM and triggers on top of. Free-running
+  // rather than per-refresh, so a single number covers a whole session.
+  static uint32_t missedBusyAssertions() { return _missedBusyAsserts; }
 
  private:
   // See resetAccounting(). Plain uint32_t: only ever written by the task driving the
   // panel, and a wrap after ~71 minutes of transactions cannot happen inside one refresh.
   static uint32_t _transferUs;
   static uint32_t _busyUs;
+  static uint32_t _missedBusyAsserts;
   // Open beginTxn()'s clock, closed by the matching endTxn().
   uint32_t _txnStartUs = 0;
 
