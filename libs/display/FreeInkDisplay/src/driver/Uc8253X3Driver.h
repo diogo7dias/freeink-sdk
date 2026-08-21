@@ -68,6 +68,15 @@ struct Uc8253X3Config {
   //
   // Appended at the end for the same reason `pll` is.
   bool promoteFirstDiffAfterFullSync = true;
+
+  // Vendor settle after a non-differential waveform, in milliseconds. Paid on every HALF
+  // and every FULL that does not power the panel down, so it recurs on every clean the
+  // anti-ghost policy forces. 200 is what this driver has always used and has never been
+  // verified against a device; it is a field rather than a constant so a shorter value can
+  // be swept without a rebuild.
+  //
+  // Appended at the end for the same reason `pll` is.
+  uint16_t postWaveformSettleMs = 200;
 };
 
 const Uc8253X3Config& uc8253X3DefaultConfig();
@@ -93,10 +102,6 @@ class Uc8253X3Driver : public PanelDriver {
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
 
-  // Vendor settle after a non-differential waveform. Named so its cost is visible, and so
-  // a shorter value can be tried against a device; 200 ms is what this driver has always
-  // used and is not itself a verified figure.
-  static constexpr uint32_t kPostWaveformSettleMs = 200;
 
   bool supportsStripGrayscale() const override { return true; }
   void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;

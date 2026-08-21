@@ -346,9 +346,9 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 
   // Vendor settle after a non-differential waveform. Skipped when the panel is being
   // powered down: nothing is drawn again before the controller is re-initialised, so
-  // there is no state left for it to settle. That is 200 ms straight off every lock,
-  // where a single FULL was measured at 2003 ms of panel time on lector.
-  if (!fastMode && !turnOff) delay(kPostWaveformSettleMs);
+  // there is no state left for it to settle. That is the whole settle straight off every
+  // lock, where a single FULL was measured at 2003 ms of panel time on lector.
+  if (!fastMode && !turnOff && _cfg.postWaveformSettleMs > 0) delay(_cfg.postWaveformSettleMs);
 
   uint8_t postConditionPasses = 0;
   if (doFullSync) {
