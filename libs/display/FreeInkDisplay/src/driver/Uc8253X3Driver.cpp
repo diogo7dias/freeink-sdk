@@ -91,6 +91,28 @@ void Uc8253X3Driver::runPostFullSettle(EpdBus& bus, const uint8_t* fb) {
   bus.cmd(CMD_DATA_STOP);
 }
 
+// waitBusy() and waitRefreshComplete() both return on the first LOW->HIGH edge, and the
+// X3 raises BUSY between the phases of its non-differential waveforms. So a caller that
+// only waits once can carry on while the panel is still driving, and the writes it makes
+// next land on a live waveform.
+//
+// Measured: a HALF that internally ran a full sync ended its post-work with BUSY low
+// (diagnostic bit 5), and the FAST after it reported BUSY low before it had written a
+// single byte (bit 2) and ran 513 ms of waveform where a warm X3 FAST needs 566 ms,
+// leaving the frame underneath visible. The culprit was runPostFullSettle()'s own
+// refresh, which is fired through triggerRefresh() and so was only ever waited once.
+//
+// No-op on a panel that really has finished, which is every differential pass.
+void Uc8253X3Driver::waitPanelIdle(EpdBus& bus) {
+  const int8_t busyPin = bus.pins().busy;
+  if (digitalRead(busyPin) == LOW) _lastDiagnostic |= kBusyLowAfterWait;
+  const unsigned long t0 = millis();
+  while (digitalRead(busyPin) == LOW && millis() - t0 < kBusyDrainTimeoutMs) delay(1);
+  const unsigned long waited = millis() - t0;
+  _lastSettleWaitMs = static_cast<uint16_t>(_lastSettleWaitMs + waited);
+  if (waited > 2) _lastDiagnostic |= kSettleWaited;
+}
+
 void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
   if (!_isScreenOn) {
     bus.cmd(CMD_POWER_ON);
@@ -99,6 +121,7 @@ void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
   }
   bus.cmd(CMD_DISPLAY_REFRESH);
   bus.waitBusy(" X3_DRF");
+  waitPanelIdle(bus);
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);
     bus.waitBusy(" X3_POF");
@@ -187,6 +210,7 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   // Probed before this refresh writes a single byte, so it separates "the previous pass
   // is still driving the panel" from "our own LUT and plane writes pulled BUSY low".
   _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowOnEntry : 0;
+  _lastSettleWaitMs = 0;
 
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
@@ -290,14 +314,7 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // have already been written to a busy controller by then.
   //
   // No-op on a panel that really has finished, which is every differential pass.
-  {
-    const int8_t busyPin = bus.pins().busy;
-    if (digitalRead(busyPin) == LOW) _lastDiagnostic |= kBusyLowAfterWait;
-    const unsigned long t0 = millis();
-    while (digitalRead(busyPin) == LOW && millis() - t0 < 2000) delay(1);
-    _lastSettleWaitMs = static_cast<uint16_t>(millis() - t0);
-    if (_lastSettleWaitMs > 2) _lastDiagnostic |= kSettleWaited;
-  }
+  waitPanelIdle(bus);
 
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);

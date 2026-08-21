@@ -112,6 +112,10 @@ class Uc8253X3Driver : public PanelDriver {
   void loadBank(EpdBus& bus, const Uc8253LutBank& bank);
   void loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const Uc8253LutBank& bank);
   void triggerRefresh(EpdBus& bus, bool turnOff);
+  void waitPanelIdle(EpdBus& bus);
+  // Upper bound on waitPanelIdle(). Far above any real waveform: it exists so a stuck
+  // BUSY line cannot wedge the reader, not as a timing parameter.
+  static constexpr unsigned long kBusyDrainTimeoutMs = 2000;
   void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
 
  public:
