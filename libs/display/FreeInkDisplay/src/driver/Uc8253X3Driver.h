@@ -128,7 +128,12 @@ class Uc8253X3Driver : public PanelDriver {
   // How long BUSY must stay high before the panel counts as idle. Long enough to bridge
   // the gap between two phases of one waveform, short enough to be noise next to a
   // 566 ms differential.
-  static constexpr unsigned long kIdleStableMs = 20;
+  //
+  // Paid twice per refresh (after the waveform, and after the DTM1 resync write), so it
+  // is 2x this off every page turn. Measured at 20 ms: the gaps this has to bridge showed
+  // up as a 500 ms drain on a half scrub and a 20 ms one on a differential, both far
+  // above this window, so 8 ms keeps the margin and returns 24 ms per page.
+  static constexpr unsigned long kIdleStableMs = 8;
   void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
 
  public:
