@@ -273,6 +273,25 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // waveform is running and waitRefreshComplete() will wake on the exact
   // completion edge rather than polling at 1 ms granularity.
   bus.waitRefreshComplete(" X3_DRF");
+
+  // The X3 drives BUSY in more than one pulse for its non-differential waveforms, and the
+  // wait above returns on the first high edge. The panel can still be working, and
+  // everything below -- the DTM1 resync, and then the next refresh's plane writes and its
+  // trigger -- would land on a live waveform. Measured: the FAST after a HALF reported
+  // BUSY already low at its trigger and ran 204 ms of waveform where an X3 FAST needs
+  // 566 ms, leaving the frame underneath visible.
+  //
+  // So wait out any further activity HERE, before this refresh's own post-work, rather
+  // than in front of the next trigger. Waiting there is too late: that refresh's planes
+  // have already been written to a busy controller by then.
+  //
+  // No-op on a panel that really has finished, which is every differential pass.
+  {
+    const int8_t busyPin = bus.pins().busy;
+    const unsigned long t0 = millis();
+    while (digitalRead(busyPin) == LOW && millis() - t0 < 2000) delay(1);
+  }
+
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);
     bus.waitBusy(" X3_POF");
