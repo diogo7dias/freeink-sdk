@@ -116,9 +116,13 @@ class Uc8253X3Driver : public PanelDriver {
 
  public:
   uint8_t lastRefreshDiagnostic() const override { return _lastDiagnostic; }
+  // Milliseconds the post-wait settle loop spent waiting out a panel that was still
+  // driving after its completion wait returned.
+  uint16_t lastSettleWaitMs() const override { return _lastSettleWaitMs; }
 
  private:
   uint8_t _lastDiagnostic = 0;
+  uint16_t _lastSettleWaitMs = 0;
 
   const Uc8253X3Config& _cfg;
 

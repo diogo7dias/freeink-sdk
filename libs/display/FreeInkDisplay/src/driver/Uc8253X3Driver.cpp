@@ -184,6 +184,10 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     grayscaleRevert(bus, fb);
   }
 
+  // Probed before this refresh writes a single byte, so it separates "the previous pass
+  // is still driving the panel" from "our own LUT and plane writes pulled BUSY low".
+  _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowOnEntry : 0;
+
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
   // Pay the settle owed by an earlier full sync, now that a differential is genuinely
@@ -242,7 +246,7 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   // Recorded, not acted on: the handshake below reads "waveform running" as BUSY low, so
   // a panel that is ALREADY low here has not finished the previous pass and this refresh
   // will complete against that one instead of its own.
-  _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowAtTrigger : 0;
+  if (digitalRead(bus.pins().busy) == LOW) _lastDiagnostic |= kBusyLowAtTrigger;
 
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform actually started (BUSY dropped LOW) before handing the
@@ -288,8 +292,11 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // No-op on a panel that really has finished, which is every differential pass.
   {
     const int8_t busyPin = bus.pins().busy;
+    if (digitalRead(busyPin) == LOW) _lastDiagnostic |= kBusyLowAfterWait;
     const unsigned long t0 = millis();
     while (digitalRead(busyPin) == LOW && millis() - t0 < 2000) delay(1);
+    _lastSettleWaitMs = static_cast<uint16_t>(millis() - t0);
+    if (_lastSettleWaitMs > 2) _lastDiagnostic |= kSettleWaited;
   }
 
   if (turnOff) {
@@ -358,6 +365,9 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 
   // Last, so the state above is already settled: this runs a whole waveform of its own.
   if (settleDue && _cfg.eagerPostFullSettle) runPostFullSettle(bus, fb);
+
+  // Final probe: whatever state this pass hands to the next one.
+  if (digitalRead(bus.pins().busy) == LOW) _lastDiagnostic |= kBusyLowAfterPost;
 }
 
 void Uc8253X3Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {

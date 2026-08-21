@@ -96,6 +96,9 @@ class FreeInkDisplay {
   // Bit set describing the last refresh's BUSY handshake. 0 = as designed. See
   // PanelDriver::RefreshDiagnostic.
   uint8_t lastRefreshDiagnostic() const;
+  // Milliseconds the last refresh spent waiting out a panel that was still driving after
+  // its completion wait returned. Diagnostic only.
+  uint16_t lastSettleWaitMs() const;
 #ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
 #endif

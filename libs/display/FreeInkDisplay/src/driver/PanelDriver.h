@@ -66,8 +66,16 @@ class PanelDriver {
   enum RefreshDiagnostic : uint8_t {
     kBusyLowAtTrigger = 1 << 0,   // panel still driving when this refresh was issued
     kAssertionNotSeen = 1 << 1,   // BUSY never went low, so "running" was never confirmed
+    kBusyLowOnEntry = 1 << 2,     // panel already driving before this refresh wrote anything
+    kBusyLowAfterWait = 1 << 3,   // the completion wait returned with the panel still driving
+    kSettleWaited = 1 << 4,       // the post-wait settle loop actually had to wait
+    kBusyLowAfterPost = 1 << 5,   // panel driving after this refresh's post-work finished
   };
   virtual uint8_t lastRefreshDiagnostic() const { return 0; }
+
+  // Milliseconds spent waiting out a panel that was still driving after its completion
+  // wait returned. Diagnostic only.
+  virtual uint16_t lastSettleWaitMs() const { return 0; }
 
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;

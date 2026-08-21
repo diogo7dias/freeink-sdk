@@ -1005,6 +1005,10 @@ uint8_t FreeInkDisplay::lastRefreshDiagnostic() const {
   return _driver != nullptr ? _driver->lastRefreshDiagnostic() : 0;
 }
 
+uint16_t FreeInkDisplay::lastSettleWaitMs() const {
+  return _driver != nullptr ? _driver->lastSettleWaitMs() : 0;
+}
+
 void FreeInkDisplay::resetRefreshAccounting() { EpdBus::resetAccounting(); }
 uint32_t FreeInkDisplay::refreshTransferMicros() { return EpdBus::transferMicros(); }
 uint32_t FreeInkDisplay::refreshBusyMicros() { return EpdBus::busyMicros(); }
