@@ -107,10 +107,20 @@ void Uc8253X3Driver::waitPanelIdle(EpdBus& bus) {
   const int8_t busyPin = bus.pins().busy;
   if (digitalRead(busyPin) == LOW) _lastDiagnostic |= kBusyLowAfterWait;
   const unsigned long t0 = millis();
-  while (digitalRead(busyPin) == LOW && millis() - t0 < kBusyDrainTimeoutMs) delay(1);
+  // Idle is BUSY staying high, not BUSY going high once. Every wait in this driver
+  // returns on a single rising edge, which is why moving one earlier or later never
+  // helped: the panel drops BUSY again between the phases of a waveform, and it also
+  // drops it while it digests a plane write. Requiring the line to hold high for a
+  // window is the only test that separates "finished" from "between phases".
+  unsigned long highSince = millis();
+  while (millis() - highSince < kIdleStableMs) {
+    if (digitalRead(busyPin) == LOW) highSince = millis();
+    if (millis() - t0 >= kBusyDrainTimeoutMs) break;
+    delay(1);
+  }
   const unsigned long waited = millis() - t0;
   _lastSettleWaitMs = static_cast<uint16_t>(_lastSettleWaitMs + waited);
-  if (waited > 2) _lastDiagnostic |= kSettleWaited;
+  if (waited > kIdleStableMs + 2) _lastDiagnostic |= kSettleWaited;
 }
 
 void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
@@ -176,6 +186,7 @@ void Uc8253X3Driver::initController(EpdBus& bus) {
 void Uc8253X3Driver::begin(EpdBus& bus) {
   bus.reset(50);  // X3 needs an extra settle after reset
   _settleOwedBeforeNextDiff = false;
+  _promoteNextDiffToHalf = false;
   _redRamSynced = false;
   // One forced clean after begin(), matching the UC8279/SSD1677 siblings' one-shot
   // _needFullClear. This was 2, which made the paint AFTER the first one a full sync too,
@@ -211,6 +222,17 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   // is still driving the panel" from "our own LUT and plane writes pulled BUSY low".
   _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowOnEntry : 0;
   _lastSettleWaitMs = 0;
+
+  // A differential leans on DTM1 holding exactly what the panel shows. After a full sync
+  // that assumption is the one thing repeatedly measured to be wrong here, and a
+  // differential cannot repair a frame it is diffing against. So the first differential
+  // after a full sync runs as a half scrub instead: it drives every pixel to its target
+  // regardless of DTM1, so a stale baseline cannot survive it. Costs about 700 ms, once,
+  // on a pass that already follows a slow one.
+  if (_promoteNextDiffToHalf && mode == RefreshMode::Fast && _cfg.promoteFirstDiffAfterFullSync) {
+    mode = RefreshMode::Half;
+  }
+  _promoteNextDiffToHalf = false;
 
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
@@ -373,6 +395,7 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // waiting on a slow pass, so displayStart() never runs more than one refresh.
   // Lazy: recorded and paid on the next differential (the old behaviour).
   _settleOwedBeforeNextDiff = settleDue && !_cfg.eagerPostFullSettle;
+  _promoteNextDiffToHalf = settleDue;
 
   if (doFullSync && _initialFullSyncsRemaining > 0) {
     _initialFullSyncsRemaining--;

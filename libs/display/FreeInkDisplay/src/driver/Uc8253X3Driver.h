@@ -59,6 +59,15 @@ struct Uc8253X3Config {
   //
   // Appended at the end for the same reason `pll` is.
   bool eagerPostFullSettle = true;
+
+  // Run the first differential after a full sync as a half scrub instead. A differential
+  // diffs against DTM1, and after a full sync that baseline is the part measured to be
+  // unreliable on this panel; a scrub drives every pixel to its target and so cannot
+  // carry a stale frame forward. Costs about 700 ms in place of about 566 ms, once per
+  // full sync. Set false to restore the plain differential.
+  //
+  // Appended at the end for the same reason `pll` is.
+  bool promoteFirstDiffAfterFullSync = true;
 };
 
 const Uc8253X3Config& uc8253X3DefaultConfig();
@@ -116,6 +125,10 @@ class Uc8253X3Driver : public PanelDriver {
   // Upper bound on waitPanelIdle(). Far above any real waveform: it exists so a stuck
   // BUSY line cannot wedge the reader, not as a timing parameter.
   static constexpr unsigned long kBusyDrainTimeoutMs = 2000;
+  // How long BUSY must stay high before the panel counts as idle. Long enough to bridge
+  // the gap between two phases of one waveform, short enough to be noise next to a
+  // 566 ms differential.
+  static constexpr unsigned long kIdleStableMs = 20;
   void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
 
  public:
@@ -127,6 +140,7 @@ class Uc8253X3Driver : public PanelDriver {
  private:
   uint8_t _lastDiagnostic = 0;
   uint16_t _lastSettleWaitMs = 0;
+  bool _promoteNextDiffToHalf = false;
 
   const Uc8253X3Config& _cfg;
 
