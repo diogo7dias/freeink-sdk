@@ -374,6 +374,12 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // Sync DTM1 ("old" RAM) with the current frame for the next fast diff.
   bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
   bus.cmd(CMD_DATA_STOP);
+  // A 52 KB plane write leaves the controller busy, and until this drain nothing waited
+  // for it. That is what handed a busy panel to the next refresh: its completion wait
+  // latched the rising edge of THIS write finishing, returned after 133 ms where a warm
+  // differential needs 566 ms, and its own waveform then ran while the host was already
+  // writing the next frame's planes. The frame underneath survived, which is the ghost.
+  waitPanelIdle(bus);
   // Both DTM planes now hold a BW frame, not grayscale planes, so the next
   // displayGrayscaleBase() can take the differential happy path. Without this
   // clear, lsbValid stays true after any grayscale page and pins
@@ -404,7 +410,10 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   _forcedConditionPassesNext = 0;
 
   // Last, so the state above is already settled: this runs a whole waveform of its own.
-  if (settleDue && _cfg.eagerPostFullSettle) runPostFullSettle(bus, fb);
+  if (settleDue && _cfg.eagerPostFullSettle) {
+    runPostFullSettle(bus, fb);
+    waitPanelIdle(bus);  // it ends on a plane write too
+  }
 
   // Final probe: whatever state this pass hands to the next one.
   if (digitalRead(bus.pins().busy) == LOW) _lastDiagnostic |= kBusyLowAfterPost;
