@@ -629,6 +629,13 @@ struct ViewableInsets {
   uint8_t left = 3;
 };
 
+// The default IS the X4's measured bezel, and every unmeasured profile inherits it,
+// so changing it silently moves chrome on all of them. Measure the board and give it
+// its own insets instead.
+static_assert(ViewableInsets{}.top == 9 && ViewableInsets{}.right == 3 && ViewableInsets{}.bottom == 3 &&
+                  ViewableInsets{}.left == 3,
+              "ViewableInsets default must stay the X4 bezel");
+
 struct BoardProfile {
   Board board;
   const char* name;
@@ -843,7 +850,14 @@ constexpr BoardProfile XTEINK_X3 = {
     NO_SDMMC,
     {20, 0, 400000, 0x55, 0},  // BQ27220 fuel gauge (0x55) on SDA20/SCL0; no charger IC
     NO_MIC,
-    {20, 0, 400000, 0x68, 0, 0x6B, 0, RtcType::Ds3231, ImuType::Qmi8658}};
+    {20, 0, 400000, 0x68, 0, 0x6B, 0, RtcType::Ds3231, ImuType::Qmi8658},
+    1.0f,  // uiScale: unchanged (button device)
+    {},    // power: no latch
+    0,     // displayControllerVariant: not probed
+    // The X3 bezel sits flush with the glass along the top edge: unlike the X4, it
+    // covers no panel rows there, so a 9px top inset only pushed the status bar and
+    // page text down by a visible white band. Sides/bottom keep the shared 3px.
+    {0, 3, 3, 3}};
 
 // --- Xteink X3 (UC8279d run) — ESP32-C3, UC8279d (792x528) -------------------
 // Newer X3 production units swap the UC8253 for a UC8279d ("d_B" silicon; the
@@ -875,7 +889,11 @@ constexpr BoardProfile XTEINK_X3_UC8279 = {
     NO_SDMMC,
     {20, 0, 400000, 0x55, 0},
     NO_MIC,
-    {20, 0, 400000, 0x68, 0, 0x6B, 0, RtcType::Ds3231, ImuType::Qmi8658}};
+    {20, 0, 400000, 0x68, 0, 0x6B, 0, RtcType::Ds3231, ImuType::Qmi8658},
+    1.0f,
+    {},
+    0,
+    {0, 3, 3, 3}};  // same glass and bezel as XTEINK_X3: no top crop
 
 // --- M5Stack PaperColor — ESP32-S3, ED2208 color panel, M5PM1 PMIC -----------
 constexpr BoardProfile M5STACK_PAPER_COLOR = {Board::M5StackPaperColor,
