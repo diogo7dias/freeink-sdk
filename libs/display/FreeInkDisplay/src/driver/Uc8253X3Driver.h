@@ -84,6 +84,29 @@ class Uc8253X3Driver : public PanelDriver {
   void loadBank(EpdBus& bus, const Uc8253LutBank& bank);
   void loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const Uc8253LutBank& bank);
   void triggerRefresh(EpdBus& bus, bool turnOff);
+  void waitPanelIdle(EpdBus& bus);
+  // Upper bound on waitPanelIdle(). Far above any real waveform: it exists so a stuck
+  // BUSY line cannot wedge the reader, not as a timing parameter.
+  static constexpr unsigned long kBusyDrainTimeoutMs = 2000;
+  // How long BUSY must stay high before the panel counts as idle. Long enough to bridge
+  // the gap between two phases of one waveform, short enough to be noise next to a
+  // 566 ms differential.
+  //
+  // Paid twice per refresh (after the waveform, and after the DTM1 resync write), so it
+  // is 2x this off every page turn. Measured at 20 ms: the gaps this has to bridge showed
+  // up as a 500 ms drain on a half scrub and a 20 ms one on a differential, both far
+  // above this window, so 8 ms keeps the margin and returns 24 ms per page.
+  static constexpr unsigned long kIdleStableMs = 8;
+
+ public:
+  uint8_t lastRefreshDiagnostic() const override { return _lastDiagnostic; }
+  // Milliseconds the post-wait settle loop spent waiting out a panel that was still
+  // driving after its completion wait returned.
+  uint16_t lastSettleWaitMs() const override { return _lastSettleWaitMs; }
+
+ private:
+  uint8_t _lastDiagnostic = 0;
+  uint16_t _lastSettleWaitMs = 0;
 
   const Uc8253X3Config& _cfg;
 
