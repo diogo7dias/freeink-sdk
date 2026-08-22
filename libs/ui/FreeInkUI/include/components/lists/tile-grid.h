@@ -53,7 +53,9 @@ struct TileGridProps {
   TextStyle text{};
   StyleSet styles{};
   int16_t iconSize = 0;
-  uint8_t radius = 18;
+  // RADIUS_INHERIT: Screen::tileGrid() substitutes the theme's controlRadius;
+  // on a bare Frame it resolves to the classic 18.
+  uint8_t radius = RADIUS_INHERIT;
 };
 
 // Height the grid needs for count tiles — for sizing the band (or a whole
@@ -78,7 +80,8 @@ void tileGrid(Frame<MaxInteractions> &frame, Rect rect, const TileGridProps &pro
       static_cast<int16_t>((rect.width - props.gap * (columns - 1)) / columns);
   if (tileW <= 0) return;
 
-  const StyleSet styles = props.styles.unset() ? tileGridStyles(props.radius) : props.styles;
+  const StyleSet styles =
+      props.styles.unset() ? tileGridStyles(resolveRadius(props.radius, 18)) : props.styles;
 
   ButtonProps tile;
   tile.text = props.text;

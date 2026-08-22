@@ -25,6 +25,13 @@ struct CapsuleSliderProps {
   Paint handle = Paint::solid(Color::White);
   Paint border = Paint::solid(Color::Black);
   int16_t stroke = 2;
+  // Corner radius. A value >= half the rect height draws the classic full
+  // stadium; smaller values square the track, fill, and handle toward a
+  // theme's card language (0 = rectangular). RADIUS_INHERIT: Screen::
+  // capsuleSlider()/sliderRow() substitute the theme's capsuleRadius; on a
+  // bare Frame 0xFF already exceeds any half-height, so the stadium stands.
+  // The handle geometry (half-height width, travel span) is shape-independent.
+  uint8_t radius = RADIUS_INHERIT;
   bool enabled = true;
 };
 
@@ -42,7 +49,9 @@ void capsuleSlider(Frame<MaxInteractions> &frame, Rect rect, const CapsuleSlider
     frame.hit(rect, props.action, props.actionValue, props.inputMask);
   }
 
-  const uint8_t radius = static_cast<uint8_t>(rect.height / 2);
+  const int16_t halfOuter = static_cast<int16_t>(rect.height / 2);
+  const uint8_t radius =
+      props.radius >= halfOuter ? static_cast<uint8_t>(halfOuter) : props.radius;
   frame.target().fill(rect, props.track, radius);
 
   const int32_t max = props.max <= 0 ? 1 : props.max;
@@ -64,15 +73,18 @@ void capsuleSlider(Frame<MaxInteractions> &frame, Rect rect, const CapsuleSlider
   // its corners poking out past the round handle.
   int16_t fillW = static_cast<int16_t>(handleCx + cap - inner.x);
   if (fillW > inner.width) fillW = inner.width;
+  // The fill and handle round by the same themed radius, clamped to the
+  // half-height cap the stadium uses.
+  const uint8_t innerRadius = props.radius >= cap ? static_cast<uint8_t>(cap) : props.radius;
   const Paint fill = props.enabled ? props.fill : Paint::dither(Color::LightGray);
-  frame.target().fill(Rect{inner.x, inner.y, fillW, inner.height}, fill, static_cast<uint8_t>(cap));
+  frame.target().fill(Rect{inner.x, inner.y, fillW, inner.height}, fill, innerRadius);
   frame.target().stroke(rect, props.border, static_cast<uint8_t>(stroke), radius);
   // The handle is drawn in the track color with its own outline so it stays
   // visible against the fill on one side and the empty track on the other.
   const Rect handle{static_cast<int16_t>(handleCx - cap), inner.y, static_cast<int16_t>(cap * 2),
                     inner.height};
-  frame.target().fill(handle, props.handle, static_cast<uint8_t>(cap));
-  frame.target().stroke(handle, props.border, static_cast<uint8_t>(stroke), static_cast<uint8_t>(cap));
+  frame.target().fill(handle, props.handle, innerRadius);
+  frame.target().stroke(handle, props.border, static_cast<uint8_t>(stroke), innerRadius);
 }
 
 }  // namespace ui

@@ -64,7 +64,11 @@ struct SliderRowProps {
   StyleSet buttonStyles{};
   int16_t captionGap = 8;  // air between the caption line and the control band
   int16_t gap = 8;         // air between the buttons and the capsule
-  uint8_t buttonRadius = 18;
+  // RADIUS_INHERIT: Screen::sliderRow() substitutes the theme's controlRadius
+  // and capsuleRadius; on a bare Frame they resolve to the classic shapes
+  // (18 on the buttons, a full stadium on the capsule).
+  uint8_t buttonRadius = RADIUS_INHERIT;
+  uint8_t capsuleRadius = RADIUS_INHERIT;
   int16_t stroke = 2;
   bool enabled = true;
 };
@@ -95,8 +99,9 @@ void sliderRow(Frame<MaxInteractions> &frame, Rect rect, const SliderRowProps &p
   if (band.height <= 0) return;
 
   const int16_t stepW = band.height;  // square, finger-sized
-  const StyleSet styles =
-      props.buttonStyles.unset() ? sliderRowStepStyles(props.buttonRadius) : props.buttonStyles;
+  const StyleSet styles = props.buttonStyles.unset()
+                              ? sliderRowStepStyles(resolveRadius(props.buttonRadius, 18))
+                              : props.buttonStyles;
 
   ButtonProps step;
   step.text = props.buttonText;
@@ -138,6 +143,7 @@ void sliderRow(Frame<MaxInteractions> &frame, Rect rect, const SliderRowProps &p
   capsule.max = props.max;
   capsule.action = props.sliderAction;
   capsule.stroke = props.stroke;
+  capsule.radius = props.capsuleRadius;
   capsule.enabled = props.enabled;
   capsuleSlider(frame, Rect{trackX, band.y, trackW, band.height}, capsule);
 }

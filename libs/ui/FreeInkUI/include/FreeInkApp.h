@@ -316,10 +316,13 @@ public:
 
   void capsuleSlider(const CapsuleSliderProps &props, int16_t height = 0,
                      LayoutAnchor anchor = LayoutAnchor::Top) {
+    CapsuleSliderProps themed = props;
+    if (themed.radius == RADIUS_INHERIT)
+      themed.radius = theme_.capsuleRadius;
     ui::capsuleSlider(
         frame_,
         take(anchor, height > 0 ? height : theme_.rowHeight, theme_.spaceSm),
-        props);
+        themed);
   }
 
   // Caption + [-] [capsule] [+] band. controlHeight sizes the control band
@@ -340,6 +343,10 @@ public:
     }
     themed.captionGap = theme_.spaceMd;
     themed.gap = theme_.spaceMd;
+    if (themed.buttonRadius == RADIUS_INHERIT)
+      themed.buttonRadius = theme_.controlRadius;
+    if (themed.capsuleRadius == RADIUS_INHERIT)
+      themed.capsuleRadius = theme_.capsuleRadius;
     if (controlHeight <= 0)
       controlHeight = static_cast<int16_t>(theme_.minTouchSize + 12);
     ui::sliderRow(
@@ -356,6 +363,8 @@ public:
     TileGridProps themed = props;
     if (textStyleUnset(themed.text))
       themed.text = theme_.smallText;
+    if (themed.radius == RADIUS_INHERIT)
+      themed.radius = theme_.controlRadius;
     if (themed.tileHeight <= 0)
       themed.tileHeight = static_cast<int16_t>(theme_.minTouchSize * 2 - 4);
     ui::tileGrid(frame_,
@@ -370,14 +379,17 @@ public:
   // a bottom sheet). Constrains the content area to the sheet's usable part
   // so subsequent takeTop() calls lay out inside it; returns that rect.
   Rect sheet(const SheetProps &props, int16_t height) {
+    SheetProps themed = props;
+    if (themed.radius == RADIUS_INHERIT)
+      themed.radius = theme_.sheetRadius;
     const Rect bounds = frame_.safeRect();
     const Rect rect =
-        props.anchor == SheetEdge::Top
+        themed.anchor == SheetEdge::Top
             ? Rect{bounds.x, bounds.y, bounds.width, height}
             : Rect{bounds.x, static_cast<int16_t>(bounds.bottom() - height),
                    bounds.width, height};
-    ui::sheet(frame_, rect, props);
-    const Rect content = sheetContentRect(rect, props);
+    ui::sheet(frame_, rect, themed);
+    const Rect content = sheetContentRect(rect, themed);
     setContentMargin(Insets{
         static_cast<int16_t>(content.y - bounds.y),
         0,

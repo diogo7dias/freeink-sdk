@@ -26,8 +26,10 @@ struct SheetProps {
   int16_t grabberInset = 16;
   int16_t grabberMargin = 8;
   // Rounded corners on the free edge, so the card reads as a sheet pulled
-  // over the page. 0 = square (a plain full-width band).
-  uint8_t radius = 0;
+  // over the page. 0 = square (a plain full-width band). RADIUS_INHERIT:
+  // Screen::sheet() substitutes the theme's sheetRadius; on a bare Frame it
+  // resolves to square.
+  uint8_t radius = RADIUS_INHERIT;
   // Optional: dispatch this action when the user taps the screen outside the
   // sheet (the customary way to dismiss one). Registered over the remaining
   // screen area on the sheet's free side.
@@ -46,7 +48,7 @@ inline Rect sheetContentRect(Rect rect, const SheetProps &props) {
 template <size_t MaxInteractions>
 void sheet(Frame<MaxInteractions> &frame, Rect rect, const SheetProps &props) {
   const bool fromTop = props.anchor == SheetEdge::Top;
-  frame.target().fill(rect, props.background, props.radius,
+  frame.target().fill(rect, props.background, resolveRadius(props.radius, 0),
                       fromTop ? CornersBottom : CornersTop);
 
   if (props.ruleWidth > 0) {
