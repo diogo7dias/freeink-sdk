@@ -106,13 +106,14 @@ void sliderRow(Frame<MaxInteractions> &frame, Rect rect, const SliderRowProps &p
 
   int16_t bandRight = band.right();
   if (props.toggleAction != NO_ACTION) {
-    ButtonProps toggle = step;
-    toggle.label = nullptr;
-    toggle.icon = props.toggleIcon;
-    toggle.iconAsset = props.toggleIconAsset;
-    toggle.action = props.toggleAction;
-    toggle.value = props.toggleValue;
-    button(frame, Rect{static_cast<int16_t>(bandRight - stepW), band.y, stepW, band.height}, toggle);
+    // Not named "toggle": that shadows the ui::toggle() component.
+    ButtonProps toggleButton = step;
+    toggleButton.label = nullptr;
+    toggleButton.icon = props.toggleIcon;
+    toggleButton.iconAsset = props.toggleIconAsset;
+    toggleButton.action = props.toggleAction;
+    toggleButton.value = props.toggleValue;
+    button(frame, Rect{static_cast<int16_t>(bandRight - stepW), band.y, stepW, band.height}, toggleButton);
     bandRight = static_cast<int16_t>(bandRight - stepW - props.gap);
   }
 
