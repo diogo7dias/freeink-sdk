@@ -37,46 +37,6 @@ struct Uc8253X3Config {
   Uc8253LutBank gc;        // OEM 4-level grayscale nudge (CDI 0x29)
   Uc8253LutBank preBwMid;  // OEM grayscale preconditioning settle (CDI 0xA9)
   uint8_t lutLen;          // bytes per LUT sent to the controller (42)
-  // PLL control byte (R30h): the panel's frame clock. Every frame the waveform LUTs count
-  // out lasts one period of it, so this scales the duration of EVERY refresh. Appended at
-  // the end of the struct on purpose — inserting it earlier would silently shift the
-  // positional initialisers that build the LUT banks. Exposed here rather than fixed in
-  // initController() so a board can tune it without forking the driver. 0x09 is the value
-  // this driver has always sent.
-  uint8_t pll;
-  // Run the post-full-sync settle at the END of the full sync rather than at the start of
-  // the next differential. Same waveform either way; only the timing moves.
-  //
-  // Paying it lazily put TWO refreshes inside one displayStart(): the settle, and then the
-  // page the user actually asked for. displayStart() hands off to displayFinish() through
-  // a single BUSY handshake, and after the settle's trigger BUSY is still low, so the
-  // handshake completed against the settle and the page's own waveform was never waited
-  // out. The page turn after any clean was left half-driven, showing the previous layout
-  // underneath the new one. Paying it here keeps displayStart() to exactly one refresh.
-  //
-  // The settle's cost (~620 ms) moves onto the clean that owed it, which is already the
-  // slow pass, instead of onto the next page turn, which is the one being watched.
-  //
-  // Appended at the end for the same reason `pll` is.
-  bool eagerPostFullSettle = true;
-
-  // Run the first differential after a full sync as a half scrub instead. A differential
-  // diffs against DTM1, and after a full sync that baseline is the part measured to be
-  // unreliable on this panel; a scrub drives every pixel to its target and so cannot
-  // carry a stale frame forward. Costs about 700 ms in place of about 566 ms, once per
-  // full sync. Set false to restore the plain differential.
-  //
-  // Appended at the end for the same reason `pll` is.
-  bool promoteFirstDiffAfterFullSync = true;
-
-  // Vendor settle after a non-differential waveform, in milliseconds. Paid on every HALF
-  // and every FULL that does not power the panel down, so it recurs on every clean the
-  // anti-ghost policy forces. 200 is what this driver has always used and has never been
-  // verified against a device; it is a field rather than a constant so a shorter value can
-  // be swept without a rebuild.
-  //
-  // Appended at the end for the same reason `pll` is.
-  uint16_t postWaveformSettleMs = 200;
 };
 
 const Uc8253X3Config& uc8253X3DefaultConfig();
@@ -91,7 +51,6 @@ class Uc8253X3Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
-  void powerOff(EpdBus& bus) override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   // Refresh split: displayStart fires the waveform and returns while the ~130-770 ms
@@ -101,7 +60,6 @@ class Uc8253X3Driver : public PanelDriver {
   bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
-
 
   bool supportsStripGrayscale() const override { return true; }
   void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
@@ -126,31 +84,6 @@ class Uc8253X3Driver : public PanelDriver {
   void loadBank(EpdBus& bus, const Uc8253LutBank& bank);
   void loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const Uc8253LutBank& bank);
   void triggerRefresh(EpdBus& bus, bool turnOff);
-  void waitPanelIdle(EpdBus& bus);
-  // Upper bound on waitPanelIdle(). Far above any real waveform: it exists so a stuck
-  // BUSY line cannot wedge the reader, not as a timing parameter.
-  static constexpr unsigned long kBusyDrainTimeoutMs = 2000;
-  // How long BUSY must stay high before the panel counts as idle. Long enough to bridge
-  // the gap between two phases of one waveform, short enough to be noise next to a
-  // 566 ms differential.
-  //
-  // Paid twice per refresh (after the waveform, and after the DTM1 resync write), so it
-  // is 2x this off every page turn. Measured at 20 ms: the gaps this has to bridge showed
-  // up as a 500 ms drain on a half scrub and a 20 ms one on a differential, both far
-  // above this window, so 8 ms keeps the margin and returns 24 ms per page.
-  static constexpr unsigned long kIdleStableMs = 8;
-  void runPostFullSettle(EpdBus& bus, const uint8_t* fb);
-
- public:
-  uint8_t lastRefreshDiagnostic() const override { return _lastDiagnostic; }
-  // Milliseconds the post-wait settle loop spent waiting out a panel that was still
-  // driving after its completion wait returned.
-  uint16_t lastSettleWaitMs() const override { return _lastSettleWaitMs; }
-
- private:
-  uint8_t _lastDiagnostic = 0;
-  uint16_t _lastSettleWaitMs = 0;
-  bool _promoteNextDiffToHalf = false;
 
   const Uc8253X3Config& _cfg;
 
@@ -165,9 +98,6 @@ class Uc8253X3Driver : public PanelDriver {
   bool _darkBackground = false;
   uint8_t _initialFullSyncsRemaining = 0;
   bool _forceFullSyncNext = false;
-  // A full sync owes one no-op fast settle before the next differential can be trusted.
-  // Deferred rather than paid immediately: see displayFinish().
-  bool _settleOwedBeforeNextDiff = false;
   uint8_t _forcedConditionPassesNext = 0;
   struct GrayState {
     bool lastBaseWasPartial = false;

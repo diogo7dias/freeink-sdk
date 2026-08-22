@@ -43,8 +43,7 @@ const Uc8253X3Config& uc8253X3DefaultConfig() {
       {lut_x3_vcom_gc, lut_x3_ww_gc, lut_x3_bw_gc, lut_x3_wb_gc, lut_x3_bb_gc},
       {lut_x3_vcom_aa_pre_bw_mid, lut_x3_ww_aa_pre_bw_mid, lut_x3_bw_aa_pre_bw_mid, lut_x3_wb_aa_pre_bw_mid,
        lut_x3_bb_aa_pre_bw_mid},
-      42,    // controller accepts 42 bytes of each 43-byte array
-      0x09,  // PLL: the value this driver has always sent
+      42,  // controller accepts 42 bytes of each 43-byte array
   };
   return cfg;
 }
@@ -79,50 +78,6 @@ void Uc8253X3Driver::loadBankCdi(EpdBus& bus, uint8_t cdi0, uint8_t cdi1, const 
   loadBank(bus, bank);
 }
 
-// The vendor's no-op settle: re-display the frame that is already on the panel through
-// the differential bank, then restore DTM1. The first differential after a full sync
-// garbles without it. Blocking, and a whole waveform (~620 ms measured on lector), which
-// is why where it runs matters as much as that it runs.
-void Uc8253X3Driver::runPostFullSettle(EpdBus& bus, const uint8_t* fb) {
-  loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
-  bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
-  triggerRefresh(bus, false);
-  bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
-  bus.cmd(CMD_DATA_STOP);
-}
-
-// waitBusy() and waitRefreshComplete() both return on the first LOW->HIGH edge, and the
-// X3 raises BUSY between the phases of its non-differential waveforms. So a caller that
-// only waits once can carry on while the panel is still driving, and the writes it makes
-// next land on a live waveform.
-//
-// Measured: a HALF that internally ran a full sync ended its post-work with BUSY low
-// (diagnostic bit 5), and the FAST after it reported BUSY low before it had written a
-// single byte (bit 2) and ran 513 ms of waveform where a warm X3 FAST needs 566 ms,
-// leaving the frame underneath visible. The culprit was runPostFullSettle()'s own
-// refresh, which is fired through triggerRefresh() and so was only ever waited once.
-//
-// No-op on a panel that really has finished, which is every differential pass.
-void Uc8253X3Driver::waitPanelIdle(EpdBus& bus) {
-  const int8_t busyPin = bus.pins().busy;
-  if (digitalRead(busyPin) == LOW) _lastDiagnostic |= kBusyLowAfterWait;
-  const unsigned long t0 = millis();
-  // Idle is BUSY staying high, not BUSY going high once. Every wait in this driver
-  // returns on a single rising edge, which is why moving one earlier or later never
-  // helped: the panel drops BUSY again between the phases of a waveform, and it also
-  // drops it while it digests a plane write. Requiring the line to hold high for a
-  // window is the only test that separates "finished" from "between phases".
-  unsigned long highSince = millis();
-  while (millis() - highSince < kIdleStableMs) {
-    if (digitalRead(busyPin) == LOW) highSince = millis();
-    if (millis() - t0 >= kBusyDrainTimeoutMs) break;
-    delay(1);
-  }
-  const unsigned long waited = millis() - t0;
-  _lastSettleWaitMs = static_cast<uint16_t>(_lastSettleWaitMs + waited);
-  if (waited > kIdleStableMs + 2) _lastDiagnostic |= kSettleWaited;
-}
-
 void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
   if (!_isScreenOn) {
     bus.cmd(CMD_POWER_ON);
@@ -131,7 +86,6 @@ void Uc8253X3Driver::triggerRefresh(EpdBus& bus, bool turnOff) {
   }
   bus.cmd(CMD_DISPLAY_REFRESH);
   bus.waitBusy(" X3_DRF");
-  waitPanelIdle(bus);
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);
     bus.waitBusy(" X3_POF");
@@ -169,7 +123,7 @@ void Uc8253X3Driver::initController(EpdBus& bus) {
   bus.data(0x3C);
   bus.data(0x37);
   bus.cmd(CMD_PLL_CONTROL);
-  bus.data(_cfg.pll);
+  bus.data(0x09);
   bus.cmd(CMD_LV_SELECTION);
   bus.data(0x02);
 
@@ -185,8 +139,6 @@ void Uc8253X3Driver::initController(EpdBus& bus) {
 
 void Uc8253X3Driver::begin(EpdBus& bus) {
   bus.reset(50);  // X3 needs an extra settle after reset
-  _settleOwedBeforeNextDiff = false;
-  _promoteNextDiffToHalf = false;
   _redRamSynced = false;
   // One forced clean after begin(), matching the UC8279/SSD1677 siblings' one-shot
   // _needFullClear. This was 2, which made the paint AFTER the first one a full sync too,
@@ -218,37 +170,8 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     grayscaleRevert(bus, fb);
   }
 
-  // Probed before this refresh writes a single byte, so it separates "the previous pass
-  // is still driving the panel" from "our own LUT and plane writes pulled BUSY low".
-  _lastDiagnostic = (digitalRead(bus.pins().busy) == LOW) ? kBusyLowOnEntry : 0;
-  _lastSettleWaitMs = 0;
-
-  // A differential leans on DTM1 holding exactly what the panel shows. After a full sync
-  // that assumption is the one thing repeatedly measured to be wrong here, and a
-  // differential cannot repair a frame it is diffing against. So the first differential
-  // after a full sync runs as a half scrub instead: it drives every pixel to its target
-  // regardless of DTM1, so a stale baseline cannot survive it. Costs about 700 ms, once,
-  // on a pass that already follows a slow one.
-  if (_promoteNextDiffToHalf && mode == RefreshMode::Fast && _cfg.promoteFirstDiffAfterFullSync) {
-    mode = RefreshMode::Half;
-  }
-  _promoteNextDiffToHalf = false;
-
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
-  // Pay the settle owed by an earlier full sync, now that a differential is genuinely
-  // about to run. Anything else re-syncs by itself, so the debt is simply dropped.
-  //
-  // Only reachable with eagerPostFullSettle off. Running a whole extra refresh here puts
-  // two waveforms inside one displayStart(), and the single BUSY handshake below then
-  // completes against the settle rather than against the page, leaving the page
-  // half-driven. See Uc8253X3Config::eagerPostFullSettle.
-  if (_settleOwedBeforeNextDiff) {
-    _settleOwedBeforeNextDiff = false;
-    if (fastMode && _redRamSynced) {
-      runPostFullSettle(bus, fb);
-    }
-  }
   const bool forcedFullSync = _forceFullSyncNext;
   const bool doFullSync =
       (!fastMode && !halfMode) || !_redRamSynced || _initialFullSyncsRemaining > 0 || forcedFullSync;
@@ -289,11 +212,6 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.waitBusy(" X3_PON");
     _isScreenOn = true;
   }
-  // Recorded, not acted on: the handshake below reads "waveform running" as BUSY low, so
-  // a panel that is ALREADY low here has not finished the previous pass and this refresh
-  // will complete against that one instead of its own.
-  if (digitalRead(bus.pins().busy) == LOW) _lastDiagnostic |= kBusyLowAtTrigger;
-
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform actually started (BUSY dropped LOW) before handing the
   // CPU back, so displayFinish()'s waitBusy() only rides out the second
@@ -303,7 +221,6 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     const int8_t busyPin = bus.pins().busy;
     const unsigned long t0 = millis();
     while (digitalRead(busyPin) == HIGH && millis() - t0 < 50) delay(1);
-    if (digitalRead(busyPin) == HIGH) _lastDiagnostic |= kAssertionNotSeen;
   }
   _pendingTurnOff = turnOff;
   _pendingDoFullSync = doFullSync;
@@ -323,32 +240,13 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // waveform is running and waitRefreshComplete() will wake on the exact
   // completion edge rather than polling at 1 ms granularity.
   bus.waitRefreshComplete(" X3_DRF");
-
-  // The X3 drives BUSY in more than one pulse for its non-differential waveforms, and the
-  // wait above returns on the first high edge. The panel can still be working, and
-  // everything below -- the DTM1 resync, and then the next refresh's plane writes and its
-  // trigger -- would land on a live waveform. Measured: the FAST after a HALF reported
-  // BUSY already low at its trigger and ran 204 ms of waveform where an X3 FAST needs
-  // 566 ms, leaving the frame underneath visible.
-  //
-  // So wait out any further activity HERE, before this refresh's own post-work, rather
-  // than in front of the next trigger. Waiting there is too late: that refresh's planes
-  // have already been written to a busy controller by then.
-  //
-  // No-op on a panel that really has finished, which is every differential pass.
-  waitPanelIdle(bus);
-
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);
     bus.waitBusy(" X3_POF");
     _isScreenOn = false;
   }
 
-  // Vendor settle after a non-differential waveform. Skipped when the panel is being
-  // powered down: nothing is drawn again before the controller is re-initialised, so
-  // there is no state left for it to settle. That is the whole settle straight off every
-  // lock, where a single FULL was measured at 2003 ms of panel time on lector.
-  if (!fastMode && !turnOff && _cfg.postWaveformSettleMs > 0) delay(_cfg.postWaveformSettleMs);
+  if (!fastMode) delay(200);
 
   uint8_t postConditionPasses = 0;
   if (doFullSync) {
@@ -374,12 +272,6 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // Sync DTM1 ("old" RAM) with the current frame for the next fast diff.
   bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
   bus.cmd(CMD_DATA_STOP);
-  // A 52 KB plane write leaves the controller busy, and until this drain nothing waited
-  // for it. That is what handed a busy panel to the next refresh: its completion wait
-  // latched the rising edge of THIS write finishing, returned after 133 ms where a warm
-  // differential needs 566 ms, and its own waveform then ran while the host was already
-  // writing the next frame's planes. The frame underneath survived, which is the ghost.
-  waitPanelIdle(bus);
   // Both DTM planes now hold a BW frame, not grayscale planes, so the next
   // displayGrayscaleBase() can take the differential happy path. Without this
   // clear, lsbValid stays true after any grayscale page and pins
@@ -387,36 +279,21 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   _grayState.lsbValid = false;
   _redRamSynced = true;
 
-  // The first differential after a full garbles on X3, so one no-op fast settle of the
-  // just-displayed frame is owed before the next differential. Owed, not due: it is a
-  // whole extra waveform (~620 ms measured on lector) and it buys nothing unless a
-  // differential actually follows.
-  //
-  // So it is recorded as pending and paid lazily in displayStart(), and only when the
-  // next refresh is a Fast one. A full or half re-syncs on its own, and a power-down ends
-  // the frame's life entirely — the common case at sleep, where this pass used to be pure
-  // cost on the way out the door.
-  const bool settleDue = doFullSync && !turnOff;
-  // Eager: paid here and now, while the panel is already awake and the caller is already
-  // waiting on a slow pass, so displayStart() never runs more than one refresh.
-  // Lazy: recorded and paid on the next differential (the old behaviour).
-  _settleOwedBeforeNextDiff = settleDue && !_cfg.eagerPostFullSettle;
-  _promoteNextDiffToHalf = settleDue;
+  // First differential after a full garbles on X3; spend a no-op fast settle of
+  // the just-displayed frame so the caller's next diff is clean.
+  if (doFullSync) {
+    loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
+    bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
+    triggerRefresh(bus, turnOff);
+    bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
+    bus.cmd(CMD_DATA_STOP);
+  }
 
   if (doFullSync && _initialFullSyncsRemaining > 0) {
     _initialFullSyncsRemaining--;
   }
   _forceFullSyncNext = false;
   _forcedConditionPassesNext = 0;
-
-  // Last, so the state above is already settled: this runs a whole waveform of its own.
-  if (settleDue && _cfg.eagerPostFullSettle) {
-    runPostFullSettle(bus, fb);
-    waitPanelIdle(bus);  // it ends on a plane write too
-  }
-
-  // Final probe: whatever state this pass hands to the next one.
-  if (digitalRead(bus.pins().busy) == LOW) _lastDiagnostic |= kBusyLowAfterPost;
 }
 
 void Uc8253X3Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
@@ -614,13 +491,6 @@ void Uc8253X3Driver::requestResync(uint8_t settlePasses) {
 void Uc8253X3Driver::skipInitialResync() {
   _initialFullSyncsRemaining = 0;
   _redRamSynced = true;
-}
-
-void Uc8253X3Driver::powerOff(EpdBus& bus) {
-  if (!_isScreenOn) return;
-  bus.cmd(CMD_POWER_OFF);
-  bus.waitBusy(" X3 power-down");
-  _isScreenOn = false;
 }
 
 void Uc8253X3Driver::deepSleep(EpdBus& bus) {
