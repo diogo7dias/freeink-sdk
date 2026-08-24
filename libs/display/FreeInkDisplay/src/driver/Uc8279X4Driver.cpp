@@ -65,9 +65,15 @@ const GrayLut* selectAaLuts() {
 
 const Uc8279X4Config& uc8279X4DefaultConfig() {
   static const Uc8279X4Config cfg = {
-      0x37,  // psr0: REG=1 (external LUT) as written at init and for AA;
-             // built-in refreshes re-assert psr0 & 0xDF = 0x17 (OTP). SHL
-             // (0x04) stays SET — see the orientation note on streamPlane.
+      0x33,  // psr0: REG=1 (external LUT) as written at init and for AA;
+             // built-in refreshes re-assert psr0 & 0xDF = 0x13 (OTP). SHL
+             // (0x04) is CLEARED: on a shipping X4 Pro UC8279 the vendor's
+             // SHL=1 (0x37) paints every frame mirrored left-to-right, letters
+             // and all, while the row order stays correct. The horizontal
+             // direction is the only axis PSR controls here; mirror-Y is the
+             // row reversal in streamPlane.
+             // NOTE: only the UC8279 batch is hardware-checked. The SSD1677
+             // batch keeps its own orientation (BoardProfile.orientation).
       0x4D,  // psr1
       0x20,  // pfs (0x03)
       0x0E,  // pll (0x30) — programmed at init on this variant
@@ -148,15 +154,10 @@ void Uc8279X4Driver::streamPlane(EpdBus& bus, uint8_t ramCmd, const uint8_t* fb,
   // Gates before the visible window (the 120-gate offset): white.
   memset(row, 0xFF, wb);
   for (uint16_t y = 0; y < _cfg.gateOffset; y++) bus.data(row, wb);
-  // Visible rows in natural order. ORIENTATION, measured on a shipping X4 Pro
-  // UC8279: the panel is mounted 90 degrees to its native scan, so the two
-  // controller knobs land on the axes swapped from what their names suggest.
-  // PSR SHL moves the image along the device's long edge, and this row order
-  // moves it along the short edge. Two boot photos pinned both: SHL=1 with the
-  // rows reversed painted a horizontal mirror, SHL=0 with the rows reversed
-  // painted a full 180 degrees. SHL=1 with the rows in natural order is upright.
-  // AA planes are sent bitwise-inverted per the vendor reference.
-  for (uint16_t y = 0; y < _h; y++) {
+  // Visible rows, mirror-Y via row reversal (mirror-X is the PSR SHL bit —
+  // same orientation convention as the UC8179 sibling). AA planes are sent
+  // bitwise-inverted per the vendor reference.
+  for (uint16_t y = _h; y-- > 0;) {
     const uint8_t* src = fb + static_cast<uint32_t>(y) * _wb;
     if (invert) {
       for (uint16_t i = 0; i < wb; i++) row[i] = static_cast<uint8_t>(~src[i]);
@@ -213,7 +214,7 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   bus.cmd(CMD_TSSET);
   bus.data(fast ? _cfg.tssetFast : _cfg.tsset);  // DU 0x5A / GC 0x1E
   bus.cmd(CMD_PANEL_SETTING);
-  bus.data(static_cast<uint8_t>(_cfg.psr0 & 0xDF));  // REG cleared -> OTP (0x17)
+  bus.data(static_cast<uint8_t>(_cfg.psr0 & 0xDF));  // REG cleared -> OTP (0x13)
   bus.data(_cfg.psr1);
   if (fast) {
     bus.cmd(CMD_PFS);
@@ -303,7 +304,7 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // copyGrayscale*] -> 5x49 LUTs -> CDI (first/later) -> PON -> PSR rewrite ->
   // DRF. No CCSET/TSSET writes on this path.
   bus.cmd(CMD_PANEL_SETTING);
-  bus.data(_cfg.psr0);  // 0x37: REG=1, external LUT
+  bus.data(_cfg.psr0);  // 0x33: REG=1, external LUT
   bus.data(_cfg.psr1);
   const GrayLut* luts = selectAaLuts();
   for (int i = 0; i < 5; i++) {
