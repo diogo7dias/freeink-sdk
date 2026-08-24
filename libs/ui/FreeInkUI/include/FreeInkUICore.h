@@ -1160,6 +1160,8 @@ private:
   // they don't have the torn-read hazard count_/interactions_ have.
   int16_t focused_ = -1;
   int16_t active_ = -1;
+  // Mirrors the last routed frame's contact, so its opening frame is visible.
+  bool contactHeld_ = false;
   ActionId flashAction_ = NO_ACTION; // tap-flash target (see setFlash)
   int16_t flashValue_ = 0;
 
@@ -1191,6 +1193,20 @@ private:
           kind != InputLongPress &&
           acceptsInput(interaction.inputMask, InputTouch);
       if (!acceptsKind && !acceptsTouchFallback)
+        continue;
+      if (interaction.rect.contains(x, y))
+        return i;
+    }
+    return -1;
+  }
+
+  int16_t findDrag(uint8_t slot, int16_t x, int16_t y) const {
+    const Interaction *interactions = interactions_[slot];
+    for (int16_t i = static_cast<int16_t>(count_[slot]) - 1; i >= 0; --i) {
+      const Interaction &interaction = interactions[i];
+      if (hasState(interaction.state, StateDisabled))
+        continue;
+      if (!acceptsInput(interaction.inputMask, InputDrag))
         continue;
       if (interaction.rect.contains(x, y))
         return i;
@@ -1246,6 +1262,16 @@ private:
 
     if (input.touchPressed) {
       active_ = findTouch(slot, input.touchX, input.touchY, InputTouch);
+    }
+
+    // touchPressed is gated on the contact first reading as a tap, which a
+    // fast drag never is. Bind on the frame the contact begins, at the point
+    // it landed — the live position would let a passing contact grab a
+    // slider. Drag-masked elements only, so taps keep press-then-release.
+    const bool contactBegan = input.touchHeld && !contactHeld_;
+    contactHeld_ = input.touchHeld;
+    if (contactBegan && active_ < 0) {
+      active_ = findDrag(slot, input.touchX, input.touchY);
     }
 
     // Grab semantics: a drag stays bound to the element the finger landed on
