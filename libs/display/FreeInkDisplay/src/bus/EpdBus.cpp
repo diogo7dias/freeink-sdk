@@ -266,9 +266,13 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   } else if (p == BusyPolarity::UcIdleHigh) {
     // X4 Pro UC8179/UC8279 production behavior: allow one RTOS tick for the
     // command to take effect, then wait only for the documented idle level.
-    // There is deliberately no fixed millisecond timeout on this controller
-    // path; issuing the next command while BUSY_N is still LOW can make the UC
-    // controller discard plane or LUT writes.
+    // Issuing the next command while BUSY_N is still LOW can make the UC
+    // controller discard plane or LUT writes, so this wait is as patient as the
+    // panel needs. It is not unbounded, though: a controller that never raises
+    // BUSY_N again used to freeze the firmware mid-frame with no trace at all.
+    // UC_IDLE_TIMEOUT_MS is far longer than any real waveform (the X4 Pro's
+    // slowest full flash measures 1333 ms), so hitting it always means the
+    // panel stopped answering — log it and let the caller carry on.
     delay(1);
     while (digitalRead(_pins.busy) == LOW) {
       busyIdle(longWait, LOW, 1);
@@ -278,6 +282,11 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
           hookFired = true;
           _busyWaitBeginHook();
         }
+      }
+      if (millis() - start > UC_IDLE_TIMEOUT_MS) {
+        if (Serial) Serial.printf("[%lu]   BUSY_N never returned high: %s (%lu ms)\n", millis(), tag ? tag : "?",
+                                  millis() - start);
+        break;
       }
     }
   } else {  // X3TwoPhase: wait for the LOW edge, then wait back to HIGH

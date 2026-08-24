@@ -163,6 +163,9 @@ class EpdBus {
 
   // Busy-wait hooks (see setBusyWaitHooks / setBusyWaitSliceHook)
   static constexpr unsigned long BUSY_WAIT_HOOK_THRESHOLD_MS = 20;
+  // Ceiling for the UcIdleHigh wait. A UC controller that stops raising BUSY_N
+  // would otherwise spin here forever and take the whole firmware with it.
+  static constexpr unsigned long UC_IDLE_TIMEOUT_MS = 8000;
   void (*_busyWaitBeginHook)() = nullptr;
   void (*_busyWaitEndHook)() = nullptr;
   bool (*_busyWaitSliceHook)(int8_t busyPin, uint8_t busyLevel) = nullptr;
