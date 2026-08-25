@@ -28,6 +28,10 @@ class InputManager {
   // Level state from the last update().
   bool isPressed(uint8_t buttonIndex) const;
 
+  // Current electrical level of the configured power-button GPIO, before
+  // logical click/hold classification. False when the board has no such GPIO.
+  bool isPowerButtonPhysicallyPressed() const;
+
   // Press edge since the previous update().
   bool wasPressed(uint8_t buttonIndex) const;
 

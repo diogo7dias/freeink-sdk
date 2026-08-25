@@ -490,6 +490,13 @@ void InputManager::update() {
 
 bool InputManager::isPressed(const uint8_t buttonIndex) const { return currentState & (1 << buttonIndex); }
 
+bool InputManager::isPowerButtonPhysicallyPressed() const {
+  const int8_t pin = BoardConfig::ACTIVE.input.power;
+  if (pin < 0) return false;
+  const int activeLevel = BoardConfig::ACTIVE.input.powerActiveHigh ? HIGH : LOW;
+  return digitalRead(pin) == activeLevel;
+}
+
 bool InputManager::wasPressed(const uint8_t buttonIndex) const { return pressedEvents & (1 << buttonIndex); }
 
 bool InputManager::wasAnyPressed() const { return pressedEvents > 0; }
