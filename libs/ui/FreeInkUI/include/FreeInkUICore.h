@@ -1189,24 +1189,12 @@ private:
       if (hasState(interaction.state, StateDisabled))
         continue;
       const bool acceptsKind = acceptsInput(interaction.inputMask, kind);
+      // InputTouch is the catch-all for tap-style kinds; long-press and drag
+      // are opt-in, so a plain button never absorbs them.
       const bool acceptsTouchFallback =
-          kind != InputLongPress &&
+          kind != InputLongPress && kind != InputDrag &&
           acceptsInput(interaction.inputMask, InputTouch);
       if (!acceptsKind && !acceptsTouchFallback)
-        continue;
-      if (interaction.rect.contains(x, y))
-        return i;
-    }
-    return -1;
-  }
-
-  int16_t findDrag(uint8_t slot, int16_t x, int16_t y) const {
-    const Interaction *interactions = interactions_[slot];
-    for (int16_t i = static_cast<int16_t>(count_[slot]) - 1; i >= 0; --i) {
-      const Interaction &interaction = interactions[i];
-      if (hasState(interaction.state, StateDisabled))
-        continue;
-      if (!acceptsInput(interaction.inputMask, InputDrag))
         continue;
       if (interaction.rect.contains(x, y))
         return i;
@@ -1260,18 +1248,21 @@ private:
     ActionEvent event{};
     const size_t slotCount = count_[slot];
 
-    if (input.touchPressed) {
-      active_ = findTouch(slot, input.touchX, input.touchY, InputTouch);
-    }
-
     // touchPressed is gated on the contact first reading as a tap, which a
     // fast drag never is. Bind on the frame the contact begins, at the point
     // it landed — the live position would let a passing contact grab a
-    // slider. Drag-masked elements only, so taps keep press-then-release.
+    // slider. Drag-masked elements only, so taps keep press-then-release;
+    // a contact starting elsewhere clears whatever the last one bound.
     const bool contactBegan = input.touchHeld && !contactHeld_;
     contactHeld_ = input.touchHeld;
-    if (contactBegan && active_ < 0) {
-      active_ = findDrag(slot, input.touchX, input.touchY);
+    if (contactBegan) {
+      active_ = findTouch(slot, input.touchX, input.touchY, InputDrag);
+    }
+
+    // Runs second so an adapter reporting both edges on one frame keeps its
+    // pressed-element highlight.
+    if (input.touchPressed) {
+      active_ = findTouch(slot, input.touchX, input.touchY, InputTouch);
     }
 
     // Grab semantics: a drag stays bound to the element the finger landed on
