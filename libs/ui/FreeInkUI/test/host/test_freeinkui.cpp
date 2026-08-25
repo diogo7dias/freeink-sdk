@@ -424,12 +424,21 @@ void testDragRouting() {
   CHECK_EQ(buffer.activeIndex(), 1);
   buffer.route(release);
 
-  // A fresh contact rebinds even when the previous one reported no release
-  // (an idle frame is all that separates them).
+  // A repaint routes a default-constructed snapshot through the same buffer.
+  // It must not end the contact: the drag stays bound across it and keeps
+  // following the finger off the rect.
   CHECK(buffer.route(contactAt(100, 20)));
   buffer.route(InputSnapshot{});
+  ActionEvent stillHeld = buffer.route(contactAt(400, 300));
+  CHECK_EQ(stillHeld.action, 1);
+  CHECK_EQ(stillHeld.dragPermille, 1000);
+  buffer.route(release);
+
+  // The release edge is what opens the latch, so the next contact binds fresh
+  // rather than inheriting what the last one held.
   CHECK(!buffer.route(contactAt(50, 60)));
-  buffer.route(InputSnapshot{});
+  CHECK_EQ(buffer.activeIndex(), -1);
+  buffer.route(release);
 
   // A disabled slider is inert on the contact edge too.
   buffer.clear();
