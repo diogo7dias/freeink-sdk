@@ -1162,6 +1162,12 @@ private:
   int16_t active_ = -1;
   // Mirrors the last routed frame's contact, so its opening frame is visible.
   bool contactHeld_ = false;
+  // Last x a bound drag dispatched from, -1 until the contact drags. A
+  // released drag commits from here: the release edge itself carries either
+  // the tap classifier's touch-DOWN point (contacts under the swipe
+  // threshold) or off-target -1,-1 coords, so routing the release like a tap
+  // snaps the value back to where the drag STARTED (or drops it entirely).
+  int16_t lastDragX_ = -1;
   ActionId flashAction_ = NO_ACTION; // tap-flash target (see setFlash)
   int16_t flashValue_ = 0;
 
@@ -1257,6 +1263,7 @@ private:
     contactHeld_ = input.touchHeld;
     if (contactBegan) {
       active_ = findTouch(slot, input.touchX, input.touchY, InputDrag);
+      lastDragX_ = -1;
     }
 
     // Runs second so an adapter reporting both edges on one frame keeps its
@@ -1274,11 +1281,29 @@ private:
           acceptsInput(held.inputMask, InputDrag)) {
         ActionEvent dragged = eventFor(slot, active_);
         dragged.dragPermille = dragPermilleFor(held.rect, input.touchX);
+        lastDragX_ = input.touchX;
         return dragged;
       }
     }
 
     if (input.touchReleased) {
+      // A contact that dragged commits as a drag, at the last held position
+      // (grab semantics: even off the rect). It must not fall through to the
+      // tap path below, whose coordinates are the touch-down point.
+      if (lastDragX_ >= 0 && active_ >= 0 &&
+          active_ < static_cast<int16_t>(slotCount)) {
+        const Interaction &held = interactions_[slot][active_];
+        const int16_t releaseIdx = active_;
+        active_ = -1;
+        if (!hasState(held.state, StateDisabled) &&
+            acceptsInput(held.inputMask, InputDrag)) {
+          ActionEvent released = eventFor(slot, releaseIdx);
+          released.dragPermille = dragPermilleFor(held.rect, lastDragX_);
+          lastDragX_ = -1;
+          return released;
+        }
+      }
+      lastDragX_ = -1;
       const int16_t idx =
           findTouch(slot, input.touchX, input.touchY,
                     input.longPress ? InputLongPress : InputTouch);

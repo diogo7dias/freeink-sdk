@@ -382,11 +382,29 @@ void testDragRouting() {
   CHECK_EQ(event.action, 1);
   CHECK_EQ(event.dragPermille, 1000);
 
+  // The release commits the drag at the LAST HELD position, even though the
+  // release frame itself arrives off-target (-1,-1: the tap classifier gave
+  // up on the contact). Without this the drag's final value depends on the
+  // release frame's coordinates -- the touch-down point for sub-swipe-length
+  // contacts (the value snaps back to where the drag started) or nothing at
+  // all for longer ones.
   InputSnapshot release;
   release.touchReleased = true;
   release.touchX = -1;
   release.touchY = -1;
-  CHECK(!buffer.route(release));
+  ActionEvent end = buffer.route(release);
+  CHECK_EQ(end.action, 1);
+  CHECK_EQ(end.dragPermille, 1000);
+
+  // Same, for a short drag whose release still classifies as a tap and so
+  // carries the touch-DOWN point: the drag's last position wins over it.
+  CHECK_EQ(buffer.route(contactAt(100, 20)).dragPermille, 500);
+  CHECK_EQ(buffer.route(contactAt(150, 20)).dragPermille, 750);
+  InputSnapshot tapRelease;
+  tapRelease.touchReleased = true;
+  tapRelease.touchX = 100;  // classifier reports where the contact began
+  tapRelease.touchY = 20;
+  CHECK_EQ(buffer.route(tapRelease).dragPermille, 750);
 
   // The landing point decides, not the live one: a contact beginning off the
   // slider never grabs it, however far it then travels across it. The button
