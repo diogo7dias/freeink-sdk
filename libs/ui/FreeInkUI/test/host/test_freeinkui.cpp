@@ -1646,6 +1646,57 @@ void testListSectionHeaders() {
   CHECK_EQ(secondHeaderY, 130);
 }
 
+void testListInvertedSectionHeaders() {
+  // Lector classic: white header text fills a full-width black band, label
+  // centred, no underline. Touch/SDK lists keep the underlined caption above.
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+  Frame<16> frame(draw, device, input, interactions);
+
+  ListItem items[3]{};
+  items[0].label = "Sleep";
+  items[0].isHeader = true;
+  items[1].label = "Unfavorite Wallpaper";
+  items[1].actionValue = 1;
+  items[1].enabled = true;
+  items[2].label = "TOOLS";
+  items[2].isHeader = true;
+
+  ListProps menu;
+  menu.items = items;
+  menu.count = 3;
+  menu.selectedIndex = -1;
+  menu.action = 80;
+  menu.rowHeight = 40;
+  menu.headerRowHeight = 40;
+  menu.sectionGap = 0;
+  menu.headerUnderline = false;
+  menu.headerText.color = Color::White;
+  menu.headerText.align = TextAlign::Center;
+  list(frame, Rect{0, 0, 480, 400}, menu);
+
+  size_t blackBands = 0;
+  size_t underlines = 0;
+  int16_t firstBandY = -1;
+  int16_t secondBandY = -1;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const FakeDrawTarget::Op& op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.height == 1) ++underlines;
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.width == 480 &&
+        op.rect.height == 40 && op.color == Color::Black) {
+      ++blackBands;
+      if (firstBandY < 0) firstBandY = op.rect.y;
+      else if (secondBandY < 0) secondBandY = op.rect.y;
+    }
+  }
+  CHECK_EQ(underlines, 0u);
+  CHECK_EQ(blackBands, 2u);
+  CHECK_EQ(firstBandY, 0);
+  CHECK_EQ(secondBandY, 80);
+}
+
 void testListWrappedLabelHeights() {
   // Per-item height: a wrapping label grows its row by the lines it USES,
   // not by maxLines; a subtitle follows the wrapped label band; and the
@@ -3350,6 +3401,7 @@ int main() {
   testThemePrimitiveParity();
   testRotationAndBitmapSampling();
   testListSectionHeaders();
+  testListInvertedSectionHeaders();
   testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();

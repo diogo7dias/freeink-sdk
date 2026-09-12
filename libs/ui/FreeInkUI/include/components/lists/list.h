@@ -364,9 +364,13 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         break;
       ++consumedIndexes;
       cursorY = static_cast<int16_t>(cursorY + pad);
+      if (props.headerText.color == Color::White) {
+        frame.target().fill(Rect{rect.x, cursorY, rect.width, headerH},
+                            Paint::solid(Color::Black));
+      }
       Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
                      static_cast<int16_t>(rowArea.width - sidePad * 2),
-                     headerLh};
+                     headerH};
       frame.target().text(headerRow, item.label, props.headerText);
       if (props.headerUnderline) {
         frame.target().fill(Rect{headerRow.x,
