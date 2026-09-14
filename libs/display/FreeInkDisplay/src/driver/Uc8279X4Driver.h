@@ -79,6 +79,7 @@ class Uc8279X4Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
+  void requestDriveAllNextFast() override { _driveAllNext = true; }
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
   // target each update. See displayStart().
@@ -139,6 +140,9 @@ class Uc8279X4Driver : public PanelDriver {
   bool _darkBackground = false;
   bool _needFullClear = true;
   bool _oldPlaneValid = false;
+  // One-shot from requestDriveAllNextFast(): next FAST runs the DU partial with the OLD
+  // plane written as the target's complement, whatever OLD held before.
+  bool _driveAllNext = false;
 
   // Grayscale absolute-plane state (ported from UC8179). `_grayBase` holds the
   // B/W base captured at displayStart; copyGrayscaleLsb folds it into stock's

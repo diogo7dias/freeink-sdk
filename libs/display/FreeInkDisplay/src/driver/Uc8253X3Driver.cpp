@@ -209,6 +209,8 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
 
   const bool fastMode = (mode == RefreshMode::Fast);
   const bool halfMode = (mode == RefreshMode::Half);
+  const bool driveAll = _driveAllNext && fastMode;
+  _driveAllNext = false;
   const bool forcedFullSync = _forceFullSyncNext;
   const bool doFullSync =
       (!fastMode && !halfMode) || !_redRamSynced || _initialFullSyncsRemaining > 0 || forcedFullSync;
@@ -228,7 +230,7 @@ bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   } else {
     // _fast turbo differential; DTM1 retains the previous frame.
     loadBankCdi(bus, 0x29, 0x07, _cfg.fast);
-    if (_darkBackground) {
+    if (_darkBackground || driveAll) {
       // Inverted content: a differential fast idles unchanged pixels, so the
       // light residue of every white->black transition parks in the black
       // background and accumulates between full syncs. Rewrite DTM1 as the

@@ -110,6 +110,7 @@ class Ssd1677Driver : public PanelDriver {
   // plane as the complement of the target so every pixel — background included —
   // is re-driven toward its target each update. See displayImpl().
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
+  void requestDriveAllNextFast() override { _driveAllNext = true; }
 
  private:
   void initController(EpdBus& bus);
@@ -143,6 +144,9 @@ class Ssd1677Driver : public PanelDriver {
   bool _inGrayscaleMode = false;
   bool _customLutActive = false;
   bool _darkBackground = false;
+  // One-shot from requestDriveAllNextFast(): the next FAST writes RED as the target's
+  // complement (every pixel re-driven) and bypasses the boot-time clean promotion.
+  bool _driveAllNext = false;
   // Async 0xFC updates cannot issue the separate power-off activation until the
   // display waveform completes; displayFinish() consumes this flag.
   bool _pendingPowerOff = false;

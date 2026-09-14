@@ -283,7 +283,11 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   // Half is CrossPoint's periodic ghost-cleanup (every getRefreshFrequency()
   // pages) AND the manual force-refresh; it MUST scrub, exactly like UC8179.
   const bool scrub = (mode == RefreshMode::Half);
-  const bool fast = (mode == RefreshMode::Fast) && !_needFullClear && _oldPlaneValid;
+  // A drive-all FAST rewrites OLD below, so neither a stale OLD plane nor the pending
+  // full clear can make it wrong; it is the host's answer to both.
+  const bool driveAll = _driveAllNext && mode == RefreshMode::Fast;
+  _driveAllNext = false;
+  const bool fast = (mode == RefreshMode::Fast) && ((!_needFullClear && _oldPlaneValid) || driveAll);
 
   streamPlane(bus, CMD_DTM2, fb);
   if (!fast) {
@@ -299,7 +303,7 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
       bus.cmd(CMD_DTM1);
       for (uint16_t y = 0; y < _tresH; y++) bus.data(whiteRow, wb);
     }
-  } else if (_darkBackground || _redriveAfterGray) {
+  } else if (_darkBackground || _redriveAfterGray || driveAll) {
     // Inverted content: the KW differential idles unchanged pixels, so the
     // light residue of every white->black transition parks in the black
     // background and accumulates between full flashes. Rewrite the OLD plane

@@ -444,7 +444,14 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // the single-pass HALF (0xD7 "_updateFull"); it never runs the multi-flash OTP
   // full waveform (0xF7 is a dead fallback branch there). Promote to HALF where
   // the board has one; boards without (Sticky) promote to their vendor FULL.
-  if (!turnOff) {
+  // A host-requested drive-all FAST needs no clean promotion: it re-drives every pixel
+  // from the complement plane written below, so what the panel physically holds does
+  // not matter, which is exactly what the one-shot promotion exists to protect.
+  const bool driveAll = _driveAllNext && mode == RefreshMode::Fast && !turnOff;
+  if (driveAll) _needsInitialFull = false;
+  _driveAllNext = false;
+
+  if (!turnOff && !driveAll) {
     if (_needsInitialFull) {
       // First paint after boot/wake must not be a differential FAST: it only drives
       // pixels that differ from the RED baseline, so it can't clear whatever is
@@ -484,7 +491,7 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
     writeRam(bus, CMD_WRITE_RAM_RED, fb, _bufferSize);
   } else {
     writeRam(bus, CMD_WRITE_RAM_BW, fb, _bufferSize);
-    if (_darkBackground) {
+    if (_darkBackground || driveAll) {
       // Inverted content: the DU compare idles unchanged pixels, so the light
       // residue of every white->black transition parks in the black background
       // and accumulates between absolute cleans. Write RED as the complement of

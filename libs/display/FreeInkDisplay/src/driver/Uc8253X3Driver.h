@@ -74,6 +74,7 @@ class Uc8253X3Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
+  void requestDriveAllNextFast() override { _driveAllNext = true; }
   // Inverted (dark-background) content: fast refreshes rewrite DTM1 ("old")
   // as the complement of the target so every pixel is re-driven toward its
   // target each update. See displayStart().
@@ -119,6 +120,9 @@ class Uc8253X3Driver : public PanelDriver {
   bool _redRamSynced = false;
   bool _inGrayscaleMode = false;
   bool _darkBackground = false;
+  // One-shot from requestDriveAllNextFast(). Only reaches the fast branch when the panel
+  // is already on: the first paint after begin() is promoted to a half scrub regardless.
+  bool _driveAllNext = false;
   uint8_t _initialFullSyncsRemaining = 0;
   bool _forceFullSyncNext = false;
   uint8_t _forcedConditionPassesNext = 0;

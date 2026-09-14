@@ -74,6 +74,7 @@ class Uc8179Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
+  void requestDriveAllNextFast() override { _driveAllNext = true; }
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
   // target each update. See displayStart().
@@ -135,6 +136,9 @@ class Uc8179Driver : public PanelDriver {
   // True once the OLD plane (0x10) holds a valid previous displayed frame, so a
   // differential partial or stock AA base transition has a real baseline.
   bool _oldPlaneValid = false;
+  // One-shot from requestDriveAllNextFast(): next FAST runs the DU partial with the OLD
+  // plane written as the target's complement, whatever OLD held before.
+  bool _driveAllNext = false;
   // True when both controller planes have been restored to the displayed B/W
   // base. False while an ordinary refresh or AA selector upload is in flight.
   bool _bwPlanesSynced = false;

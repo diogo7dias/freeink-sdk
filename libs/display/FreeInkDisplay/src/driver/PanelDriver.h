@@ -208,6 +208,13 @@ class PanelDriver {
   // non-flashing. Drivers may use this to widen their drive set (re-blacken
   // the unchanged background each update) or bias their deghost direction.
   virtual void setBackgroundHint(bool darkBackground) { (void)darkBackground; }
+  // One-shot: the next FAST drives EVERY pixel toward its target instead of only the
+  // pixels that differ from the controller's old plane — the same complement-old-plane
+  // mechanism the dark-background hint uses, applied once. For a host that knows the
+  // controller's old plane is meaningless (first paint after a wake whose sleep face was
+  // arbitrary content) but wants the differential waveform's speed rather than a clearing
+  // pass. Consumed by the next display() of any mode. No-op on drivers without it.
+  virtual void requestDriveAllNextFast() {}
   // Capture the cancellation generation at the start of a logical UI render.
   // This must happen before CPU-side composition: input arriving while an old
   // frame is being composed must still cancel its optional post-refresh work.

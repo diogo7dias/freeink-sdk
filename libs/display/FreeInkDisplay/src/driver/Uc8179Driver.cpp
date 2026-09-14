@@ -290,7 +290,11 @@ bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // Half is the explicit strong scrub. Post-AA Fast paints are intercepted by
   // display() and use stock's non-flashing XTF_PRE_BW_MID transition instead.
   const bool scrub = (mode == RefreshMode::Half);
-  const bool fast = (mode == RefreshMode::Fast) && !scrub && !_needFullClear && _oldPlaneValid;
+  // A drive-all FAST rewrites OLD below, so neither a stale OLD plane nor the pending
+  // full clear can make it wrong; it is the host's answer to both.
+  const bool driveAll = _driveAllNext && mode == RefreshMode::Fast;
+  _driveAllNext = false;
+  const bool fast = (mode == RefreshMode::Fast) && !scrub && ((!_needFullClear && _oldPlaneValid) || driveAll);
 
   // NEW plane (0x13) = new frame.
   streamPlane(bus, CMD_DTM2, fb);
@@ -307,9 +311,10 @@ bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
       bus.cmd(CMD_DTM1);
       for (uint16_t y = 0; y < _tresH; y++) bus.data(whiteRow, wb);
     }
-  } else if (_darkBackground) {
+  } else if (_darkBackground || driveAll) {
     // Inverted content uses the target complement even with DU so unchanged dark
-    // background pixels do not park residue.
+    // background pixels do not park residue. A drive-all wake uses it for the same
+    // reason with an unknown previous frame.
     streamPlane(bus, CMD_DTM1, fb, /*invert=*/true);
   }
   // (Ordinary Fast: OLD still holds the previous frame from displayFinish.)

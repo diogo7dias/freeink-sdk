@@ -890,6 +890,10 @@ void FreeInkDisplay::skipInitialResync() {
   if (_driver) _driver->skipInitialResync();
 }
 
+void FreeInkDisplay::requestDriveAllNextFast() {
+  if (_driver) _driver->requestDriveAllNextFast();
+}
+
 void FreeInkDisplay::beginDisplayWork() {
   if (_driver) _driver->beginDisplayWork();
 }
