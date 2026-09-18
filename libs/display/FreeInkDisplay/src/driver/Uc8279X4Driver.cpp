@@ -445,7 +445,8 @@ void Uc8279X4Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
 
 void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                                  bool factoryMode) {
-  (void)lut;          // waveform is the variant-selected built-in xtfAa table set
+  // lut, when non-null, replaces the variant-selected built-in xtfAa waveform data
+  // (5 x GRAY_LUT_LEN bytes, contiguous, no command prefixes). See the write loop below.
   (void)factoryMode;  // 4-level is absolute (defined by the planes)
 
   // Vendor AA sequence: PSR (REG=1) -> [planes already in RAM via
@@ -457,7 +458,11 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   const GrayLut* luts = selectAaLuts();
   for (int i = 0; i < 5; i++) {
     bus.cmd(luts[i].cmd);
-    bus.data(luts[i].data, GRAY_LUT_LEN);
+    // Optional override: 5 contiguous GRAY_LUT_LEN payloads, no command prefixes.
+    // Null keeps the probed variant's stock tables. The command bytes always come
+    // from the stock table, so an override can only change the waveform data, never
+    // which registers it is written to.
+    bus.data(lut ? lut + i * GRAY_LUT_LEN : luts[i].data, GRAY_LUT_LEN);
   }
   bus.cmd(CMD_VCOM_DATA_INTERVAL);
   bus.data(_cfg.cdiAa);  // constant 0x97 every AA refresh (stock; no first/later split)
