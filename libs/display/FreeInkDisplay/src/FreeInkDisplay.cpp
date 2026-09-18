@@ -429,6 +429,16 @@ uint8_t* FreeInkDisplay::lendBuildStorage(uint32_t* sizeOut) {
   _buildLent = true;
   frameBuffer = nullptr;   // rendering is unavailable while the bytes are lent
   _shadowValid = false;    // controller baseline no longer matches
+  // The async baseline is framebuffer-sized (48000 bytes on an 800x480 panel)
+  // and, with the framebuffer lent, it is both stale and unreachable: nothing
+  // can display until the loan ends. Holding it means a borrower that lends the
+  // framebuffer precisely because the heap is short — a TLS transfer, a section
+  // build — pays for a second framebuffer it cannot use. releaseBuffers()
+  // already hands it back for the same reason; do the same here. It
+  // re-allocates and re-seeds on the next async display, which is exactly the
+  // state _shadowValid = false above already puts the caller in.
+  free(_asyncShadow);
+  _asyncShadow = nullptr;
   if (sizeOut != nullptr) *sizeOut = bufferSize;  // full alloc is usable as scratch
   return frameBuffer0;     // the allocation itself is never freed, so it never moves
 }
