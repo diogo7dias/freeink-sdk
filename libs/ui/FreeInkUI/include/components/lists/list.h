@@ -15,13 +15,68 @@ struct ListItem {
   State state = StateNormal;
   int16_t actionValue = 0;
   bool enabled = true;
-  // Section header row: shorter, non-interactive, drawn with headerText and
-  // an underline; never selected or focused.
+  // Section header row: non-interactive unless ListProps::sections is set.
   bool isHeader = false;
   // On/off row: a switch (toggle-row visuals) replaces the value slot; the
   // value string is ignored when set. Activation stays row-level via action.
   bool toggle = false;
   bool toggleChecked = false;
+};
+
+// Optional accordion state over a full ListItem array. Navigation uses visible
+// indexes; itemIndex() maps them back to the caller's unchanged data. Rows before
+// the first header stay visible. A header owns rows up to the next header.
+struct ListSections {
+  int expandedHeader = -1;
+
+  int headerFor(const ListItem *items, int index) const {
+    while (index >= 0 && !items[index].isHeader) --index;
+    return index;
+  }
+
+  // ponytail: linear scans for short menus; add an index only for large lists.
+  int visibleIndex(const ListItem *items, int count, int itemIndex) const {
+    int visible = 0;
+    int header = -1;
+    for (int i = 0; i < count; ++i) {
+      if (items[i].isHeader) header = i;
+      if (items[i].isHeader || header < 0 || header == expandedHeader) {
+        if (i == itemIndex) return visible;
+        ++visible;
+      }
+    }
+    return itemIndex == count ? visible : -1;
+  }
+
+  int visibleCount(const ListItem *items, int count) const {
+    return visibleIndex(items, count, count);
+  }
+
+  int itemIndex(const ListItem *items, int count, int visibleIndex) const {
+    int header = -1;
+    for (int i = 0; i < count; ++i) {
+      if (items[i].isHeader) header = i;
+      if (items[i].isHeader || header < 0 || header == expandedHeader) {
+        if (visibleIndex-- == 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  // Opening another section changes visible indexes: return the new cursor.
+  int focus(const ListItem *items, int count, int visible) {
+    const int index = itemIndex(items, count, visible);
+    if (index < 0) return -1;
+    expandedHeader = headerFor(items, index);
+    return visibleIndex(items, count, index);
+  }
+
+  // -1 means nothing was open, so the caller can leave the screen.
+  int collapse(const ListItem *items, int count) {
+    const int header = expandedHeader;
+    expandedHeader = -1;
+    return visibleIndex(items, count, header);
+  }
 };
 
 struct ListNav;
@@ -143,6 +198,10 @@ struct ListProps {
   // never-drawn row and page jumps can skip rows entirely.
   // ListNav::syncToProps() wires this automatically.
   ListNav *nav = nullptr;
+  // Opt-in accordion: full array only (no itemsWindow). count remains the full
+  // count; top/selection and dispatched action values are VISIBLE indexes.
+  // Headers get touch targets, viewport feedback and a plus/minus indicator.
+  const ListSections *sections = nullptr;
 };
 
 // Stateful companion to the immediate-mode list helpers in FreeInkUICore.h:
@@ -300,6 +359,13 @@ template <size_t MaxInteractions>
 void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   if (!props.items || props.count == 0)
     return;
+  // Accordion mapping needs the entire source array, never a virtual window.
+  if (props.sections && (props.itemsWindowFirst != 0 ||
+      (props.itemsWindowCount != 0 && props.itemsWindowCount < props.count)))
+    return;
+  const uint16_t count = props.sections
+      ? static_cast<uint16_t>(props.sections->visibleCount(props.items, props.count))
+      : props.count;
   const int16_t rowH = props.rowHeight > 0 ? props.rowHeight : 36;
   const int16_t rowGap = props.rowGap < 0 ? 0 : props.rowGap;
   const int16_t sidePad = props.sidePadding < 0 ? 8 : props.sidePadding;
@@ -310,22 +376,22 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       props.scrollIndicatorInset < 0 ? 0 : props.scrollIndicatorInset;
   const int16_t rowInset = props.rowInset < 0 ? 0 : props.rowInset;
   const uint16_t visible = listVisibleRows(rect, rowH, rowGap);
-  const bool overflows = props.count > visible;
+  const bool overflows = count > visible;
   uint16_t top = props.topIndex;
-  if (top > props.count - 1)
-    top = props.count - 1;
+  if (top > count - 1)
+    top = count - 1;
   // Nav-managed lists (props.nav set) clamp their own viewport with the
   // MEASURED page size (ListNav::scrollBy / onListRendered). The fixed-height
   // clamp below would undo the nav's follow correction when wrapped rows fit
   // fewer than `visible`: the nav advances top, this clamp pulls it back, and
   // the last row(s) can never be drawn (the rebuild loop oscillates instead
   // of converging).
-  if (overflows && !props.nav && top > props.count - visible)
-    top = static_cast<uint16_t>(props.count - visible);
+  if (overflows && !props.nav && top > count - visible)
+    top = static_cast<uint16_t>(count - visible);
   if (!overflows)
     top = 0;
   const uint16_t end =
-      overflows ? static_cast<uint16_t>(top + visible) : props.count;
+      overflows ? static_cast<uint16_t>(top + visible) : count;
 
   Rect rowArea = rect;
   if (rowInset > 0) {
@@ -342,7 +408,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       if (scrollLeft)
         rowArea.x = static_cast<int16_t>(rowArea.x + cut);
     }
-    drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
+    drawListScrollIndicator(frame.target(), rect, count, visible, top,
                             scrollW, scrollLeft ? 1 : 0, scrollInset);
   }
 
@@ -356,20 +422,31 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   uint16_t drawnRows = 0;
   uint16_t consumedIndexes = 0; // item AND header indexes laid out from top
   bool selectedDrawn = false;
-  for (uint16_t i = top; i < props.count; ++i) {
+  for (uint16_t i = top; i < count; ++i) {
     // Stop before reading the next window entry. The size/layout work below
     // dereferences `item`, so checking after it would require callers that
     // virtualize their data to provide one extra, otherwise out-of-window row.
     if (drawnRows >= visible || i >= end || i < props.itemsWindowFirst ||
         (props.itemsWindowCount > 0 && i - props.itemsWindowFirst >= props.itemsWindowCount))
       break;
-    const ListItem &item = props.items[i - props.itemsWindowFirst];
+    const int itemIndex = props.sections ? props.sections->itemIndex(props.items, props.count, i)
+                                         : i - props.itemsWindowFirst;
+    const ListItem &item = props.items[itemIndex];
     if (item.isHeader) {
       const int16_t pad = i != top ? props.sectionGap : 0;
-      if (static_cast<int16_t>(cursorY + pad + headerH) > rowArea.bottom())
+      // Give tappable headers a full touch slot without enlarging their ink band
+      // or letting an expanded hit rectangle overlap the first child row.
+      const int16_t touchPad = props.sections && frame.device().hasTouch
+          ? static_cast<int16_t>(std::max<int>(0, (frame.device().minTouchSize - headerH + 1) / 2)) : 0;
+      if (static_cast<int16_t>(cursorY + pad + headerH + touchPad * 2) > rowArea.bottom())
         break;
       ++consumedIndexes;
-      cursorY = static_cast<int16_t>(cursorY + pad);
+      cursorY = static_cast<int16_t>(cursorY + pad + touchPad);
+      if (props.sections && props.selectedIndex == static_cast<int16_t>(i))
+        selectedDrawn = true;
+      const int16_t indicatorW = props.sections ? headerLh : 0;
+      Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
+                     static_cast<int16_t>(rowArea.width - sidePad * 2), headerH};
       if (props.headerText.color == Color::White) {
         // Hugging: measure the label and fill only that, honouring the text
         // alignment so the band lands under the glyphs it inverts. A label
@@ -380,7 +457,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
           const int16_t textW =
               frame.target().measureText(props.headerText.font, item.label, props.headerText).width;
           const int16_t bandW = static_cast<int16_t>(
-              std::min<int32_t>(textW + props.headerFillPadX * 2, rect.width));
+              std::min<int32_t>(textW + indicatorW + props.headerFillPadX * 2, rect.width));
           int16_t bandX = static_cast<int16_t>(rowArea.x + sidePad - props.headerFillPadX);
           if (props.headerText.align == TextAlign::Center) {
             bandX = static_cast<int16_t>(rect.x + (rect.width - bandW) / 2);
@@ -391,12 +468,33 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
           if (bandX < rect.x) bandX = rect.x;
           if (bandX + bandW > rect.x + rect.width) bandX = static_cast<int16_t>(rect.x + rect.width - bandW);
           fill = Rect{bandX, cursorY, bandW, headerH};
+          if (props.sections) {
+            headerRow.x = static_cast<int16_t>(bandX + props.headerFillPadX);
+            headerRow.width = static_cast<int16_t>(std::max<int>(0, bandW - props.headerFillPadX * 2));
+          }
         }
         frame.target().fill(fill, Paint::solid(Color::Black));
       }
-      Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
-                     static_cast<int16_t>(rowArea.width - sidePad * 2),
-                     headerH};
+      if (props.sections) {
+        // Geometric plus/minus: no strings, font glyph dependency or allocation.
+        const int16_t size = static_cast<int16_t>(std::min<int>(indicatorW, headerRow.width) / 2);
+        const int16_t x = headerRow.x;
+        const int16_t y = static_cast<int16_t>(cursorY + headerH / 2);
+        const Paint ink = Paint::solid(props.headerText.color);
+        frame.target().fill(Rect{x, y, size, 1}, ink);
+        if (props.sections->expandedHeader != itemIndex)
+          frame.target().fill(Rect{static_cast<int16_t>(x + size / 2),
+                                  static_cast<int16_t>(y - size / 2), 1, size}, ink);
+        headerRow.x = static_cast<int16_t>(headerRow.x + indicatorW);
+        headerRow.width = static_cast<int16_t>(std::max<int>(0, headerRow.width - indicatorW));
+        if (props.action != NO_ACTION && item.enabled) {
+          frame.hit(ensureMinTouchRect(Rect{rowArea.x, static_cast<int16_t>(cursorY - touchPad), rowArea.width,
+                                          static_cast<int16_t>(headerH + touchPad * 2)},
+                                      frame.device().minTouchSize, frame.screen()),
+                    props.action, static_cast<int16_t>(i), props.inputMask,
+                    props.selectedIndex == static_cast<int16_t>(i) ? StateSelected : StateNormal);
+        }
+      }
       frame.target().text(headerRow, item.label, props.headerText);
       if (props.headerUnderline) {
         frame.target().fill(Rect{headerRow.x,
@@ -404,7 +502,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                                  headerRow.width, 1},
                             Paint::solid(props.headerText.color));
       }
-      cursorY = static_cast<int16_t>(cursorY + headerH + rowGap);
+      cursorY = static_cast<int16_t>(cursorY + headerH + rowGap + touchPad);
       continue;
     }
     // Per-item height: text whose style allows wrapping (maxLines > 1) and
@@ -515,9 +613,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
           static_cast<int>(state) & ~static_cast<int>(StateDisabled));
       frame.hit(
           ensureMinTouchRect(row, frame.device().minTouchSize, frame.screen()),
-          props.action, item.actionValue, props.inputMask, hitState);
+          props.action, props.sections ? static_cast<int16_t>(i) : item.actionValue, props.inputMask, hitState);
     }
-    state = frame.stateFor(props.action, item.actionValue, state);
+    state = frame.stateFor(props.action, props.sections ? static_cast<int16_t>(i) : item.actionValue, state);
     StyleSet styles =
         props.rowStyles.unset() ? defaultListRowStyles() : props.rowStyles;
     if (props.rowRadius > 0)
@@ -702,10 +800,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     // between — pressing Next then selects a different item than previewed).
     const uint16_t partialIndex = static_cast<uint16_t>(top + consumedIndexes);
     const int16_t remainingH = static_cast<int16_t>(rowArea.bottom() - cursorY);
-    if (partialIndex < props.count && partialIndex >= props.itemsWindowFirst &&
+    if (partialIndex < count && partialIndex >= props.itemsWindowFirst &&
         (props.itemsWindowCount == 0 || partialIndex - props.itemsWindowFirst < props.itemsWindowCount) &&
         remainingH >= props.partialTrailingMinHeight) {
-      const ListItem &item = props.items[partialIndex - props.itemsWindowFirst];
+      const ListItem &item = props.items[props.sections
+          ? props.sections->itemIndex(props.items, props.count, partialIndex)
+          : partialIndex - props.itemsWindowFirst];
       if (!item.isHeader && item.label != nullptr && item.label[0] != '\0') {
         Rect row{rowArea.x, cursorY, rowArea.width, remainingH};
         StyleSet styles =
