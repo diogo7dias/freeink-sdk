@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../FreeInkUICore.h"
+#include <algorithm>
 
 namespace freeink {
 namespace ui {
@@ -129,6 +130,11 @@ struct ListProps {
   int16_t headerRowHeight = 0; // 0 = headerText line height + underline gap
   int16_t sectionGap = 16;     // extra padding above a non-first header
   bool headerUnderline = true;
+  // Inverted header fill (headerText.color == White) hugs the label instead of
+  // spanning the row. The band is measured from the text, so a short heading
+  // gets a short band; padding is per side around the glyphs.
+  bool headerFillHugsText = false;
+  int16_t headerFillPadX = 8;
   // Optional viewport-feedback channel: when set, list() reports the laid-out
   // viewport back to the nav (effective top, indexes that actually fit,
   // whether the selected row was drawn). Variable-height rows (wrapped
@@ -365,8 +371,28 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       ++consumedIndexes;
       cursorY = static_cast<int16_t>(cursorY + pad);
       if (props.headerText.color == Color::White) {
-        frame.target().fill(Rect{rect.x, cursorY, rect.width, headerH},
-                            Paint::solid(Color::Black));
+        // Hugging: measure the label and fill only that, honouring the text
+        // alignment so the band lands under the glyphs it inverts. A label
+        // wider than the row clamps back to the full width rather than
+        // bleeding outside it.
+        Rect fill{rect.x, cursorY, rect.width, headerH};
+        if (props.headerFillHugsText && item.label != nullptr && item.label[0] != '\0') {
+          const int16_t textW =
+              frame.target().measureText(props.headerText.font, item.label, props.headerText).width;
+          const int16_t bandW = static_cast<int16_t>(
+              std::min<int32_t>(textW + props.headerFillPadX * 2, rect.width));
+          int16_t bandX = static_cast<int16_t>(rowArea.x + sidePad - props.headerFillPadX);
+          if (props.headerText.align == TextAlign::Center) {
+            bandX = static_cast<int16_t>(rect.x + (rect.width - bandW) / 2);
+          } else if (props.headerText.align == TextAlign::Right) {
+            bandX = static_cast<int16_t>(rowArea.x + rowArea.width - sidePad - bandW +
+                                         props.headerFillPadX);
+          }
+          if (bandX < rect.x) bandX = rect.x;
+          if (bandX + bandW > rect.x + rect.width) bandX = static_cast<int16_t>(rect.x + rect.width - bandW);
+          fill = Rect{bandX, cursorY, bandW, headerH};
+        }
+        frame.target().fill(fill, Paint::solid(Color::Black));
       }
       Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
                      static_cast<int16_t>(rowArea.width - sidePad * 2),
