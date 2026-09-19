@@ -4,6 +4,8 @@
 // build free of the wolfSSL dependency while leaving a single, well-defined
 // integration point for the TLS 1.3 transport.
 #if defined(FREEINK_NET_WOLFSSL)
+#include <cerrno>
+#include <lwip/sockets.h>
 #include <wolfssl/ssl.h>
 #endif
 
@@ -39,11 +41,15 @@ int wcSend(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
 }
 int wcRecv(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
   auto* t = static_cast<WiFiClient*>(ctx);
-  if (!t->connected() && t->available() == 0) return WOLFSSL_CBIO_ERR_CONN_CLOSE;
-  if (t->available() == 0) return WOLFSSL_CBIO_ERR_WANT_READ;
-  const int n = t->read(reinterpret_cast<uint8_t*>(buf), sz);
-  if (n <= 0) return WOLFSSL_CBIO_ERR_WANT_READ;
-  return n;
+  // wolfSSL already supplies its record buffer. NetworkClient::read() would
+  // allocate another 1436-byte RX buffer on the system heap and copy through
+  // it. No other code reads this private transport, so recv can fill the TLS
+  // buffer directly (including when that buffer lives in lent scratch).
+  const int n = recv(t->fd(), buf, sz, MSG_DONTWAIT);
+  if (n > 0) return n;
+  if (n == 0) return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+  if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) return WOLFSSL_CBIO_ERR_WANT_READ;
+  return WOLFSSL_CBIO_ERR_GENERAL;
 }
 
 bool isWantIo(const int err) {
