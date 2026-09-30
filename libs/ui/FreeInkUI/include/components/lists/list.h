@@ -89,6 +89,28 @@ enum class SelectionMarker : uint8_t {
   Bitmap, // caller-supplied glyph (markerBitmap/markerAsset) at the left edge
 };
 
+namespace contents {
+// Pixel geometry of the contents look, measured off the workshop mockup it
+// reproduces (lector mockups/inbook-menu-looks, option 5) at 480 wide.
+constexpr int16_t SIDE = 36;             // text inset from both edges
+constexpr int16_t ROW_H = 37;            // 6 above, a 25px line, 6 below
+constexpr int16_t ROW_BASELINE = 27;     // row top to the label baseline
+constexpr int16_t LEADER_Y = 20;         // row top to the dotted leader
+constexpr int16_t SUB_ROW_H = 61;        // a row with an italic line under it
+constexpr int16_t SUB_BASELINE = 50;     // row top to the italic line's baseline
+constexpr int16_t LEADER_GAP = 8;        // air between leader and text
+constexpr int16_t DOT = 2;               // leader dot size; the pitch is 2 * DOT
+constexpr int16_t HEAD_H = 53;           // 8 above, 33 line, 6, the rule, 6
+constexpr int16_t HEAD_BASELINE = 35;    // heading top to its baseline
+constexpr int16_t HEAD_RULE_Y = 46;      // heading top to its 1px rule
+constexpr int16_t HEAD_NUMERAL_GAP = 14; // numeral to heading label
+constexpr int16_t HEAD_TRACKING = 2;     // letter spacing inside the numeral
+constexpr int16_t MARKER_X = 14;         // the selection triangle's left edge
+constexpr int16_t MARKER_W = 11;
+constexpr int16_t MARKER_H = 16;
+constexpr int16_t MARKER_RAISE = 6;      // triangle centre above the baseline
+} // namespace contents
+
 struct ListProps {
   const ListItem *items = nullptr;
   uint16_t count = 0;
@@ -210,6 +232,10 @@ struct ListProps {
   // labelText the rows' (its bold cut marks the selection). One flat list:
   // sections are ignored. Geometry is fixed, see contentsList().
   bool contentsLook = false;
+  // The contents look's text inset from both edges of the list's rect. A host whose
+  // body is already inset (a status screen with side padding) passes 0; the cursor
+  // keeps its place left of the text either way.
+  int16_t contentsSide = contents::SIDE;
   TextStyle headingNumeralText{}; // numeral beside a heading
 };
 
@@ -378,27 +404,6 @@ inline void romanNumeral(int n, char *out, size_t size) {
   snprintf(out, size, "%s%s", TENS[n / 10], ONES[n % 10]);
 }
 
-namespace contents {
-// Pixel geometry of the contents look, measured off the workshop mockup it
-// reproduces (lector mockups/inbook-menu-looks, option 5) at 480 wide.
-constexpr int16_t SIDE = 36;             // text inset from both edges
-constexpr int16_t ROW_H = 37;            // 6 above, a 25px line, 6 below
-constexpr int16_t ROW_BASELINE = 27;     // row top to the label baseline
-constexpr int16_t LEADER_Y = 20;         // row top to the dotted leader
-constexpr int16_t SUB_ROW_H = 61;        // a row with an italic line under it
-constexpr int16_t SUB_BASELINE = 50;     // row top to the italic line's baseline
-constexpr int16_t LEADER_GAP = 8;        // air between leader and text
-constexpr int16_t DOT = 2;               // leader dot size; the pitch is 2 * DOT
-constexpr int16_t HEAD_H = 53;           // 8 above, 33 line, 6, the rule, 6
-constexpr int16_t HEAD_BASELINE = 35;    // heading top to its baseline
-constexpr int16_t HEAD_RULE_Y = 46;      // heading top to its 1px rule
-constexpr int16_t HEAD_NUMERAL_GAP = 14; // numeral to heading label
-constexpr int16_t HEAD_TRACKING = 2;     // letter spacing inside the numeral
-constexpr int16_t MARKER_X = 14;         // the selection triangle's left edge
-constexpr int16_t MARKER_W = 11;
-constexpr int16_t MARKER_H = 16;
-constexpr int16_t MARKER_RAISE = 6;      // triangle centre above the baseline
-} // namespace contents
 
 // Text whose baseline sits at `baseline`, starting at x, clipped to maxW.
 inline void contentsText(DrawTarget &target, int16_t x, int16_t baseline,
@@ -425,10 +430,11 @@ inline int16_t contentsNumeral(DrawTarget &target, int16_t x, int16_t baseline,
   return advance;
 }
 
-inline void contentsMarker(DrawTarget &target, int16_t rowX, int16_t baseline,
+// The cursor, left of text that starts at textX.
+inline void contentsMarker(DrawTarget &target, int16_t textX, int16_t baseline,
                            Paint paint) {
   using namespace contents;
-  const int16_t x = static_cast<int16_t>(rowX + MARKER_X);
+  const int16_t x = static_cast<int16_t>(textX - (SIDE - MARKER_X));
   const int16_t cy = static_cast<int16_t>(baseline - MARKER_RAISE);
   target.triangle(Point{x, static_cast<int16_t>(cy - MARKER_H / 2)},
                   Point{x, static_cast<int16_t>(cy + MARKER_H / 2)},
@@ -444,8 +450,8 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
   DrawTarget &target = frame.target();
   const uint16_t count = props.count;
   uint16_t top = props.topIndex < count ? props.topIndex : 0;
-  const int16_t right = static_cast<int16_t>(rect.right() - SIDE);
-  const int16_t textX = static_cast<int16_t>(rect.x + SIDE);
+  const int16_t right = static_cast<int16_t>(rect.right() - props.contentsSide);
+  const int16_t textX = static_cast<int16_t>(rect.x + props.contentsSide);
   int16_t y = rect.y;
   uint16_t consumed = 0;
   bool selectedDrawn = false;
@@ -523,7 +529,7 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
     }
 
     if (selected) {
-      contentsMarker(target, rect.x, baseline, props.markerPaint);
+      contentsMarker(target, textX, baseline, props.markerPaint);
       selectedDrawn = true;
     }
     if (props.action != NO_ACTION && item.enabled && !item.isHeader) {
