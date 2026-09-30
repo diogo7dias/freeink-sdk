@@ -102,6 +102,10 @@ struct KeyboardProps {
   // edge). Visual rects are unchanged.
   int16_t bottomHitOverflow = 0;
   bool inactiveSelection = false;
+  // The contents look: keys are bare labels over a hairline, the row above the first
+  // closed by one more; the selected key is bold with a short rule under its label.
+  // keyStyles are ignored (no fill, no border).
+  bool hairlines = false;
 };
 
 // `numberRow` prepends a dedicated digit row (with shift-symbol alternates on
@@ -507,6 +511,7 @@ template <size_t MaxInteractions>
 void keyboard(Frame<MaxInteractions>& frame, Rect rect, const KeyboardProps& props) {
   if (!props.layout || !props.layout->rows || props.layout->rowCount == 0) return;
   StyleSet styles = props.keyStyles.unset() ? defaultButtonStyles() : props.keyStyles;
+  if (props.hairlines) styles = StyleSet{BoxStyle{}, BoxStyle{}, BoxStyle{}, BoxStyle{}, BoxStyle{}, true};
   if (props.keyRadius > 0) setStyleRadius(styles, props.keyRadius);
   TextStyle keyText = props.labelText;
   keyText.align = TextAlign::Center;
@@ -543,12 +548,24 @@ void keyboard(Frame<MaxInteractions>& frame, Rect rect, const KeyboardProps& pro
     bp.inputMask = props.inputMask;
     bp.state = state;
     bp.text = keyText;
+    const bool marked = hasState(state, StateSelected) || hasState(state, StateFocused);
+    if (props.hairlines) bp.text.bold = marked;
     bp.styles = styles;
     bp.minTouchSize = props.minTouchSize;
     bp.hitPadding.bottom = rowHitOverflow;
     bp.radius = props.keyRadius;
     bp.enabled = key.enabled && key.kind != KeyKind::Disabled;
     button(frame, keyRect, bp);
+    if (props.hairlines) {
+      const Paint ink = Paint::solid(Color::Black);
+      frame.target().fill(Rect{keyRect.x, static_cast<int16_t>(keyRect.bottom() - 1), keyRect.width, 1}, ink);
+      if (marked) {
+        const int16_t inset = static_cast<int16_t>(keyRect.width * 22 / 100);
+        frame.target().fill(Rect{static_cast<int16_t>(keyRect.x + inset), static_cast<int16_t>(keyRect.bottom() - 9),
+                                 static_cast<int16_t>(keyRect.width - inset * 2), 2},
+                            ink);
+      }
+    }
 
     if (key.kind == KeyKind::Delete) {
       // Size the delete glyph from the label font so it reads at the same
@@ -593,6 +610,7 @@ void keyboard(Frame<MaxInteractions>& frame, Rect rect, const KeyboardProps& pro
                         Point{static_cast<int16_t>(cx + half), static_cast<int16_t>(cy + 3)}, 3, ink);
   };
 
+  if (props.hairlines) frame.target().fill(Rect{rect.x, rect.y, rect.width, 1}, Paint::solid(Color::Black));
   for (uint8_t row = 0; row < props.layout->rowCount; ++row) {
     const KeyboardRow& layoutRow = props.layout->rows[row];
     if (!layoutRow.keys || layoutRow.count == 0) continue;

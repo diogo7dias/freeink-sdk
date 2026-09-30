@@ -2650,6 +2650,36 @@ void testLocalizedKeyboardLayout() {
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 }
 
+void testKeyboardHairlines() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<40> interactions;
+  Frame<40> frame(draw, device, input, interactions);
+
+  KeyboardProps props;
+  props.layout = &builtinKeyboardLayout(KeyboardLayoutId::QwertyEn);
+  props.keyAction = 410;
+  props.selectedIndex = 0;
+  props.hairlines = true;
+  props.gap = 0;
+  props.padding = Insets{0, 0, 0, 0};
+  keyboard(frame, Rect{0, 0, 480, 160}, props);
+
+  // No key is filled or boxed: every fill is a 1px hairline or the 2px cursor rule.
+  size_t hairlines = 0, rules = 0, other = 0;
+  for (const auto& op : draw.ops) {
+    if (op.kind != FakeDrawTarget::Op::Fill || op.paint != PaintKind::Solid) continue;
+    if (op.rect.height == 1) ++hairlines;
+    else if (op.rect.height == 2) ++rules;
+    else ++other;
+  }
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
+  CHECK_EQ(other, 0u);
+  CHECK_EQ(rules, 1u);  // only the selected key is underlined
+  CHECK_EQ(hairlines, interactions.count() + 1);  // one per key, plus the top rule
+}
+
 void testSymbolKeyboardPages() {
   // `shifted` pages the symbols layers: page one ("?123") and page two ("#+=").
   const KeyboardLayout& page1 = builtinKeyboardLayout(KeyboardLayoutId::QwertyEn, false, true);
@@ -3665,6 +3695,7 @@ int main() {
   testListContentsLook();
   testListContentsSubtitleWindow();
   testListContentsWrappedLabel();
+  testKeyboardHairlines();
   testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();
