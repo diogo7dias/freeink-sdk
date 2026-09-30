@@ -203,16 +203,14 @@ struct ListProps {
   // count; top/selection and dispatched action values are VISIBLE indexes.
   // Headers get touch targets, viewport feedback and a plus/minus indicator.
   const ListSections *sections = nullptr;
-  // Contents look: the list reads like a book's contents page. Headings carry
-  // roman numerals; the open section's heading is set large over a rule, the
-  // closed ones are single contents lines; rows run a dotted leader out to
-  // their value; the selection is a small triangle in the margin and a bold
-  // label, never a filled band. headerText is the open heading's face,
-  // labelText the rows' and contents lines' (its bold cut marks the selection).
-  // Geometry is fixed, see contentsList(). Headers draw no touch padding.
+  // Contents look: the list reads like a book's contents page. Each heading
+  // is set large with a roman numeral over a rule; rows run a dotted leader
+  // out to their value; the selection is a small triangle in the margin and a
+  // bold label, never a filled band. headerText is the heading's face,
+  // labelText the rows' (its bold cut marks the selection). One flat list:
+  // sections are ignored. Geometry is fixed, see contentsList().
   bool contentsLook = false;
-  TextStyle headingNumeralText{}; // numeral beside the open heading
-  TextStyle tocNumeralText{};     // numeral at the head of a contents line
+  TextStyle headingNumeralText{}; // numeral beside a heading
 };
 
 // Stateful companion to the immediate-mode list helpers in FreeInkUICore.h:
@@ -394,11 +392,6 @@ constexpr int16_t HEAD_BASELINE = 35;    // heading top to its baseline
 constexpr int16_t HEAD_RULE_Y = 46;      // heading top to its 1px rule
 constexpr int16_t HEAD_NUMERAL_GAP = 14; // numeral to heading label
 constexpr int16_t HEAD_TRACKING = 2;     // letter spacing inside the numeral
-constexpr int16_t TOC_H = 35;            // one contents line
-constexpr int16_t TOC_BASELINE = 26;     // line top to baseline
-constexpr int16_t TOC_AFTER_ROWS = 10;   // above contents lines that follow rows
-constexpr int16_t TOC_LABEL_X = 44;      // numeral column, SIDE to the label
-constexpr int16_t TOC_TRACKING = 1;
 constexpr int16_t MARKER_X = 14;         // the selection triangle's left edge
 constexpr int16_t MARKER_W = 11;
 constexpr int16_t MARKER_H = 16;
@@ -440,74 +433,46 @@ inline void contentsMarker(DrawTarget &target, int16_t rowX, int16_t baseline,
                   Point{static_cast<int16_t>(x + MARKER_W), cy}, paint);
 }
 
-// The contents look (ListProps::contentsLook). Same contract as list(): the
-// sections map visible indexes, rows register hits, and the nav hears back
-// what fit.
+// The contents look (ListProps::contentsLook). Same contract as list() for a
+// flat list: rows register hits and the nav hears back what fit.
 template <size_t MaxInteractions>
 void contentsList(Frame<MaxInteractions> &frame, Rect rect,
                   const ListProps &props) {
   using namespace contents;
   DrawTarget &target = frame.target();
-  const uint16_t count = props.sections
-      ? static_cast<uint16_t>(props.sections->visibleCount(props.items, props.count))
-      : props.count;
+  const uint16_t count = props.count;
   uint16_t top = props.topIndex < count ? props.topIndex : 0;
   const int16_t right = static_cast<int16_t>(rect.right() - SIDE);
   const int16_t textX = static_cast<int16_t>(rect.x + SIDE);
   int16_t y = rect.y;
   uint16_t consumed = 0;
   bool selectedDrawn = false;
-  bool afterRow = false;
+  int ordinal = 0; // headings before top count too
+  for (uint16_t h = 0; h < top; ++h)
+    if (props.items[h].isHeader)
+      ++ordinal;
   char numeral[8];
 
   for (uint16_t i = top; i < count; ++i) {
-    const int itemIndex = props.sections
-        ? props.sections->itemIndex(props.items, props.count, i)
-        : i;
-    if (itemIndex < 0)
-      break;
-    const ListItem &item = props.items[itemIndex];
+    const ListItem &item = props.items[i];
     const bool selected = props.selectedIndex == static_cast<int16_t>(i);
     Rect slot{rect.x, y, rect.width, 0};
     int16_t baseline = 0;
 
     if (item.isHeader) {
-      // ponytail: counts headings from the start on every header, fine for
-      // menu-sized lists.
-      int ordinal = 0;
-      for (int h = 0; h <= itemIndex; ++h)
-        if (props.items[h].isHeader)
-          ++ordinal;
-      romanNumeral(ordinal, numeral, sizeof numeral);
-      const bool open = !props.sections || props.sections->expandedHeader == itemIndex;
-      if (open) {
-        slot.height = HEAD_H;
-        if (slot.bottom() > rect.bottom())
-          break;
-        baseline = static_cast<int16_t>(y + HEAD_BASELINE);
-        const int16_t numW = contentsNumeral(target, textX, baseline, numeral,
-                                             props.headingNumeralText, HEAD_TRACKING);
-        const int16_t labelX = static_cast<int16_t>(textX + numW + HEAD_NUMERAL_GAP);
-        contentsText(target, labelX, baseline, static_cast<int16_t>(right - labelX),
-                     item.label, props.headerText);
-        target.fill(Rect{textX, static_cast<int16_t>(y + HEAD_RULE_Y),
-                         static_cast<int16_t>(right - textX), 1},
-                    Paint::solid(Color::Black));
-      } else {
-        const int16_t gap = afterRow ? TOC_AFTER_ROWS : 0;
-        slot.height = static_cast<int16_t>(TOC_H + gap);
-        if (slot.bottom() > rect.bottom())
-          break;
-        baseline = static_cast<int16_t>(y + gap + TOC_BASELINE);
-        contentsNumeral(target, textX, baseline, numeral, props.tocNumeralText,
-                        TOC_TRACKING);
-        TextStyle label = props.labelText;
-        label.bold = selected;
-        const int16_t labelX = static_cast<int16_t>(textX + TOC_LABEL_X);
-        contentsText(target, labelX, baseline, static_cast<int16_t>(right - labelX),
-                     item.label, label);
-      }
-      afterRow = false;
+      slot.height = HEAD_H;
+      if (slot.bottom() > rect.bottom())
+        break;
+      romanNumeral(++ordinal, numeral, sizeof numeral);
+      baseline = static_cast<int16_t>(y + HEAD_BASELINE);
+      const int16_t numW = contentsNumeral(target, textX, baseline, numeral,
+                                           props.headingNumeralText, HEAD_TRACKING);
+      const int16_t labelX = static_cast<int16_t>(textX + numW + HEAD_NUMERAL_GAP);
+      contentsText(target, labelX, baseline, static_cast<int16_t>(right - labelX),
+                   item.label, props.headerText);
+      target.fill(Rect{textX, static_cast<int16_t>(y + HEAD_RULE_Y),
+                       static_cast<int16_t>(right - textX), 1},
+                  Paint::solid(Color::Black));
     } else {
       slot.height = ROW_H;
       if (slot.bottom() > rect.bottom())
@@ -542,17 +507,15 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
           target.fill(Rect{dx, static_cast<int16_t>(y + LEADER_Y), DOT, DOT},
                       Paint::solid(Color::Black));
       }
-      afterRow = true;
     }
 
     if (selected) {
       contentsMarker(target, rect.x, baseline, props.markerPaint);
       selectedDrawn = true;
     }
-    if (props.action != NO_ACTION && item.enabled) {
-      const int16_t value = props.sections ? static_cast<int16_t>(i) : item.actionValue;
+    if (props.action != NO_ACTION && item.enabled && !item.isHeader) {
       frame.hit(ensureMinTouchRect(slot, frame.device().minTouchSize, frame.screen()),
-                props.action, value, props.inputMask,
+                props.action, item.actionValue, props.inputMask,
                 selected ? StateSelected : StateNormal);
     }
     y = static_cast<int16_t>(y + slot.height);

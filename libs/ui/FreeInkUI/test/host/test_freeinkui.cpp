@@ -1738,8 +1738,8 @@ void testListSectionHeaders() {
 }
 
 void testListContentsLook() {
-  // Contents look: open heading over a rule, rows with a dotted leader to the
-  // value, a triangle on the selection, closed sections as contents lines.
+  // Contents look: one flat list, every heading numbered over a rule, rows
+  // with a dotted leader to the value, a triangle on the selection.
   FakeDrawTarget draw;
   DeviceContext device = makeDevice();
   InputSnapshot input;
@@ -1751,32 +1751,33 @@ void testListContentsLook() {
   items[0].isHeader = true;
   items[1].label = "Status Bar";
   items[1].value = "On";
+  items[1].actionValue = 1;
   items[2].label = "Themes";
+  items[2].actionValue = 2;
   items[3].label = "Navigate";
   items[3].isHeader = true;
   items[4].label = "Chapter";
+  items[4].actionValue = 4;
 
-  ListSections sections;
-  sections.expandedHeader = 0;
   ListProps menu;
   menu.items = items;
   menu.count = 5;
-  menu.sections = &sections;
   menu.selectedIndex = 1;
   menu.action = 80;
   menu.contentsLook = true;
   list(frame, Rect{0, 0, 480, 400}, menu);
 
-  // Look, its two rows and the closed Navigate line; Chapter stays hidden.
-  CHECK_EQ(interactions.count(), 4u);
+  // Rows only are interactive; headings are titles.
+  CHECK_EQ(interactions.count(), 3u);
+  CHECK_EQ(interactions.data()[2].value, 4);
   size_t rules = 0, dots = 0;
-  int16_t ruleY = -1, dotY = -1, firstDotX = -1, lastDotX = -1;
+  int16_t ruleY[2]{}, dotY = -1, firstDotX = -1, lastDotX = -1;
   for (size_t i = 0; i < draw.opCount; ++i) {
     const FakeDrawTarget::Op& op = draw.ops[i];
     if (op.kind != FakeDrawTarget::Op::Fill) continue;
     if (op.rect.height == 1) {
+      if (rules < 2) ruleY[rules] = op.rect.y;
       ++rules;
-      ruleY = op.rect.y;
       CHECK_EQ(op.rect.x, 36);
       CHECK_EQ(op.rect.width, 408);
     } else if (op.rect.width == 2 && op.rect.height == 2) {
@@ -1786,8 +1787,10 @@ void testListContentsLook() {
       lastDotX = op.rect.x;
     }
   }
-  CHECK_EQ(rules, 1u);
-  CHECK_EQ(ruleY, 46);
+  // Both headings: Look at 0, Navigate after Look's heading and two rows.
+  CHECK_EQ(rules, 2u);
+  CHECK_EQ(ruleY[0], 46);
+  CHECK_EQ(ruleY[1], 53 + 37 * 2 + 46);
   // Only the row with a value runs a leader, 20px below its top (53).
   CHECK_EQ(dotY, 73);
   // 36 + "Status Bar" (60) + 8 to "On" at 444 - 12, less 8.

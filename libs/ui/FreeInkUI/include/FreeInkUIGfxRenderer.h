@@ -33,13 +33,12 @@ class GfxRendererTarget final : public DrawTarget {
   static constexpr FontId FONT_SMALL = 0;
   static constexpr FontId FONT_BODY = 1;
   static constexpr FontId FONT_TITLE = 2;
-  // Three more slots for screens that draw with more than three faces (the
-  // contents look: a heading, its numeral, a contents line's numeral). Unbound
-  // slots fall back to FONT_BODY's font id 0, like the first three.
+  // Two more slots for screens that draw with more than three faces (the
+  // contents look: a heading and its numeral). Unbound slots hold font id 0,
+  // like the first three.
   static constexpr FontId FONT_EXTRA_1 = 3;
   static constexpr FontId FONT_EXTRA_2 = 4;
-  static constexpr FontId FONT_EXTRA_3 = 5;
-  static constexpr size_t FONT_SLOTS = 6;
+  static constexpr size_t FONT_SLOTS = 5;
 
   explicit GfxRendererTarget(const GfxRenderer& renderer) : renderer(renderer) {
     for (size_t i = 0; i < FONT_SLOTS; ++i) fonts[i] = 0;
