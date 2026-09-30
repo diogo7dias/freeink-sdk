@@ -385,6 +385,8 @@ constexpr int16_t SIDE = 36;             // text inset from both edges
 constexpr int16_t ROW_H = 37;            // 6 above, a 25px line, 6 below
 constexpr int16_t ROW_BASELINE = 27;     // row top to the label baseline
 constexpr int16_t LEADER_Y = 20;         // row top to the dotted leader
+constexpr int16_t SUB_ROW_H = 61;        // a row with an italic line under it
+constexpr int16_t SUB_BASELINE = 50;     // row top to the italic line's baseline
 constexpr int16_t LEADER_GAP = 8;        // air between leader and text
 constexpr int16_t DOT = 2;               // leader dot size; the pitch is 2 * DOT
 constexpr int16_t HEAD_H = 53;           // 8 above, 33 line, 6, the rule, 6
@@ -448,13 +450,20 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
   uint16_t consumed = 0;
   bool selectedDrawn = false;
   int ordinal = 0; // headings before top count too
-  for (uint16_t h = 0; h < top; ++h)
-    if (props.items[h].isHeader)
+  // A windowed list (itemsWindowFirst) only has its window to count from.
+  const uint16_t first = props.itemsWindowFirst;
+  const uint16_t end = props.itemsWindowCount > 0
+                           ? static_cast<uint16_t>(first + props.itemsWindowCount)
+                           : count;
+  if (top < first)
+    top = first;
+  for (uint16_t h = first; h < top; ++h)
+    if (props.items[h - first].isHeader)
       ++ordinal;
   char numeral[8];
 
-  for (uint16_t i = top; i < count; ++i) {
-    const ListItem &item = props.items[i];
+  for (uint16_t i = top; i < count && i < end; ++i) {
+    const ListItem &item = props.items[i - first];
     const bool selected = props.selectedIndex == static_cast<int16_t>(i);
     Rect slot{rect.x, y, rect.width, 0};
     int16_t baseline = 0;
@@ -474,10 +483,14 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
                        static_cast<int16_t>(right - textX), 1},
                   Paint::solid(Color::Black));
     } else {
-      slot.height = ROW_H;
+      slot.height = item.subtitle ? SUB_ROW_H : ROW_H;
       if (slot.bottom() > rect.bottom())
         break;
       baseline = static_cast<int16_t>(y + ROW_BASELINE);
+      if (item.subtitle)
+        contentsText(target, textX, static_cast<int16_t>(y + SUB_BASELINE),
+                     static_cast<int16_t>(right - textX), item.subtitle,
+                     props.subtitleText);
       TextStyle label = props.labelText;
       TextStyle value = props.valueText;
       label.bold = value.bold = selected;

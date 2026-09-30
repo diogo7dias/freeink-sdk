@@ -1814,6 +1814,58 @@ void testListContentsLook() {
   CHECK(numeral[0] == '\0');
 }
 
+void testListContentsSubtitleWindow() {
+  // A windowed contents list (items holds absolute rows 3 and 4 only) whose
+  // rows carry an italic line: each row is 61 tall with that line's baseline
+  // 50 below the row top.
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+  Frame<16> frame(draw, device, input, interactions);
+
+  ListItem items[2]{};
+  items[0].label = "Dune";
+  items[0].subtitle = "42% - 3/18";
+  items[0].actionValue = 3;
+  items[1].label = "Emma";
+  items[1].subtitle = "8%";
+  items[1].actionValue = 4;
+
+  ListProps props;
+  props.items = items;
+  props.count = 10;
+  props.itemsWindowFirst = 3;
+  props.itemsWindowCount = 2;
+  props.topIndex = 3;
+  props.selectedIndex = 4;
+  props.action = 80;
+  props.contentsLook = true;
+  list(frame, Rect{0, 0, 480, 400}, props);
+
+  // Only the window is drawn, and nothing is read past it.
+  CHECK_EQ(interactions.count(), 2u);
+  CHECK_EQ(interactions.data()[0].value, 3);
+  CHECK_EQ(interactions.data()[1].value, 4);
+  const int16_t ascent = draw.ascent(props.subtitleText.font);
+  int16_t subtitleTops[2]{-1, -1};
+  size_t texts = 0;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    if (draw.ops[i].kind != FakeDrawTarget::Op::Text) continue;
+    if (texts == 0) subtitleTops[0] = draw.ops[i].rect.y;
+    if (texts == 2) subtitleTops[1] = draw.ops[i].rect.y;
+    ++texts;
+  }
+  CHECK_EQ(texts, 4u);
+  CHECK_EQ(subtitleTops[0], 50 - ascent);
+  CHECK_EQ(subtitleTops[1], 61 + 50 - ascent);
+  // The marker is on the second row: baseline 61 + 27, centre 6 above.
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    if (draw.ops[i].kind != FakeDrawTarget::Op::Triangle) continue;
+    CHECK_EQ(draw.ops[i].rect.y, 61 + 27 - 6 - 8);
+  }
+}
+
 void testListInvertedSectionHeaders() {
   // Lector classic: white header text fills a full-width black band, label
   // centred, no underline. Touch/SDK lists keep the underlined caption above.
@@ -3572,6 +3624,7 @@ int main() {
   testListSectionHeaders();
   testListInvertedSectionHeaders();
   testListContentsLook();
+  testListContentsSubtitleWindow();
   testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();
