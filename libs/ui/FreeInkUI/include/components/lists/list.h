@@ -489,42 +489,59 @@ void contentsList(Frame<MaxInteractions> &frame, Rect rect,
                        static_cast<int16_t>(right - textX), 1},
                   Paint::solid(Color::Black));
     } else {
-      slot.height = item.subtitle ? SUB_ROW_H : ROW_H;
+      TextStyle label = props.labelText;
+      TextStyle value = props.valueText;
+      label.bold = value.bold = selected;
+      // A label allowed more than one line (a saved quote) wraps over the full width
+      // and the row grows by its extra lines; such a row carries no leader.
+      int16_t extra = 0;
+      if (label.maxLines > 1 && item.label) {
+        const int16_t lh = target.lineHeight(label.font);
+        const int16_t lines = static_cast<int16_t>(
+            measureWrappedText(target, item.label, label, static_cast<int16_t>(right - textX)).height / lh);
+        if (lines > 1)
+          extra = static_cast<int16_t>((lines - 1) * lh);
+      }
+      slot.height = static_cast<int16_t>((item.subtitle ? SUB_ROW_H : ROW_H) + extra);
       if (slot.bottom() > rect.bottom())
         break;
       baseline = static_cast<int16_t>(y + ROW_BASELINE);
       if (item.subtitle)
-        contentsText(target, textX, static_cast<int16_t>(y + SUB_BASELINE),
+        contentsText(target, textX, static_cast<int16_t>(y + SUB_BASELINE + extra),
                      static_cast<int16_t>(right - textX), item.subtitle,
                      props.subtitleText);
-      TextStyle label = props.labelText;
-      TextStyle value = props.valueText;
-      label.bold = value.bold = selected;
-      int16_t valueX = right;
-      if (item.value && item.value[0]) {
-        // Values are set in lower case ("on", "portrait"), part of the look.
-        // ASCII only; other scripts keep their own case.
-        char lower[32];
-        snprintf(lower, sizeof lower, "%s", item.value);
-        for (char *c = lower; *c; ++c)
-          if (*c >= 'A' && *c <= 'Z')
-            *c = static_cast<char>(*c - 'A' + 'a');
-        valueX = static_cast<int16_t>(
-            right - target.measureText(value.font, lower, value).width);
-        contentsText(target, valueX, baseline, static_cast<int16_t>(right - valueX),
-                     lower, value);
-      }
-      const int16_t labelW = target.measureText(label.font, item.label, label).width;
-      const int16_t labelMax = static_cast<int16_t>(
-          valueX - textX - (valueX < right ? LEADER_GAP : 0));
-      contentsText(target, textX, baseline, labelMax, item.label, label);
-      if (valueX < right) {
-        // Dots from after the label to before the value, whole dots only.
-        const int16_t from = static_cast<int16_t>(textX + labelW + LEADER_GAP);
-        const int16_t to = static_cast<int16_t>(valueX - LEADER_GAP);
-        for (int16_t dx = from; dx + DOT <= to; dx = static_cast<int16_t>(dx + DOT * 2))
-          target.fill(Rect{dx, static_cast<int16_t>(y + LEADER_Y), DOT, DOT},
-                      Paint::solid(Color::Black));
+      if (extra > 0) {
+        const int16_t lh = target.lineHeight(label.font);
+        target.text(Rect{textX, static_cast<int16_t>(baseline - target.ascent(label.font)),
+                         static_cast<int16_t>(right - textX), static_cast<int16_t>(extra + lh)},
+                    item.label, label);
+      } else {
+        int16_t valueX = right;
+        if (item.value && item.value[0]) {
+          // Values are set in lower case ("on", "portrait"), part of the look.
+          // ASCII only; other scripts keep their own case.
+          char lower[32];
+          snprintf(lower, sizeof lower, "%s", item.value);
+          for (char *c = lower; *c; ++c)
+            if (*c >= 'A' && *c <= 'Z')
+              *c = static_cast<char>(*c - 'A' + 'a');
+          valueX = static_cast<int16_t>(
+              right - target.measureText(value.font, lower, value).width);
+          contentsText(target, valueX, baseline, static_cast<int16_t>(right - valueX),
+                       lower, value);
+        }
+        const int16_t labelW = target.measureText(label.font, item.label, label).width;
+        const int16_t labelMax = static_cast<int16_t>(
+            valueX - textX - (valueX < right ? LEADER_GAP : 0));
+        contentsText(target, textX, baseline, labelMax, item.label, label);
+        if (valueX < right) {
+          // Dots from after the label to before the value, whole dots only.
+          const int16_t from = static_cast<int16_t>(textX + labelW + LEADER_GAP);
+          const int16_t to = static_cast<int16_t>(valueX - LEADER_GAP);
+          for (int16_t dx = from; dx + DOT <= to; dx = static_cast<int16_t>(dx + DOT * 2))
+            target.fill(Rect{dx, static_cast<int16_t>(y + LEADER_Y), DOT, DOT},
+                        Paint::solid(Color::Black));
+        }
       }
     }
 

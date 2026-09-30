@@ -1866,6 +1866,45 @@ void testListContentsSubtitleWindow() {
   }
 }
 
+void testListContentsWrappedLabel() {
+  // A label allowed several lines wraps over the full width and pushes the next
+  // row down by its extra lines; a wrapped row draws no leader.
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+  Frame<16> frame(draw, device, input, interactions);
+
+  ListItem items[2]{};
+  items[0].label = "Her full nature, like that river of which Cyrus broke the strength, spent itself in channels";
+  items[0].value = "finale";
+  items[0].actionValue = 0;
+  items[1].label = "Next";
+  items[1].actionValue = 1;
+
+  ListProps props;
+  props.items = items;
+  props.count = 2;
+  props.selectedIndex = 1;
+  props.action = 80;
+  props.contentsLook = true;
+  props.labelText.maxLines = 8;
+  list(frame, Rect{0, 0, 480, 600}, props);
+
+  const int16_t lh = draw.lineHeight(props.labelText.font);
+  const int16_t lines = static_cast<int16_t>(measureWrappedText(draw, items[0].label, props.labelText, 408).height / lh);
+  CHECK(lines > 1);
+  // The cursor is on the second row: its top is 37 + the first row's extra lines.
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    if (draw.ops[i].kind != FakeDrawTarget::Op::Triangle) continue;
+    CHECK_EQ(draw.ops[i].rect.y, 37 + (lines - 1) * lh + 27 - 6 - 8);
+  }
+  size_t dots = 0;
+  for (size_t i = 0; i < draw.opCount; ++i)
+    if (draw.ops[i].kind == FakeDrawTarget::Op::Fill && draw.ops[i].rect.width == 2) ++dots;
+  CHECK_EQ(dots, 0u);
+}
+
 void testListInvertedSectionHeaders() {
   // Lector classic: white header text fills a full-width black band, label
   // centred, no underline. Touch/SDK lists keep the underlined caption above.
@@ -3625,6 +3664,7 @@ int main() {
   testListInvertedSectionHeaders();
   testListContentsLook();
   testListContentsSubtitleWindow();
+  testListContentsWrappedLabel();
   testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();
