@@ -705,6 +705,12 @@ public:
   virtual Size measureText(FontId font, const char *text,
                            TextStyle style) const = 0;
   virtual int16_t lineHeight(FontId font) const = 0;
+  // Line top to baseline, for layouts that place text on a baseline rather
+  // than centring it in a band. The default is a typical Latin proportion;
+  // targets that know the real font metric override it.
+  virtual int16_t ascent(FontId font) const {
+    return static_cast<int16_t>(lineHeight(font) * 4 / 5);
+  }
   // text() implementations must honor style.align, style.maxLines, and
   // ellipsis truncation. Targets with a native wrapping pipeline (bidi,
   // kerning-aware) should use it; everyone else can delegate the whole

@@ -1737,6 +1737,80 @@ void testListSectionHeaders() {
   CHECK_EQ(secondHeaderY, 130);
 }
 
+void testListContentsLook() {
+  // Contents look: open heading over a rule, rows with a dotted leader to the
+  // value, a triangle on the selection, closed sections as contents lines.
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+  Frame<16> frame(draw, device, input, interactions);
+
+  ListItem items[5]{};
+  items[0].label = "Look";
+  items[0].isHeader = true;
+  items[1].label = "Status Bar";
+  items[1].value = "On";
+  items[2].label = "Themes";
+  items[3].label = "Navigate";
+  items[3].isHeader = true;
+  items[4].label = "Chapter";
+
+  ListSections sections;
+  sections.expandedHeader = 0;
+  ListProps menu;
+  menu.items = items;
+  menu.count = 5;
+  menu.sections = &sections;
+  menu.selectedIndex = 1;
+  menu.action = 80;
+  menu.contentsLook = true;
+  list(frame, Rect{0, 0, 480, 400}, menu);
+
+  // Look, its two rows and the closed Navigate line; Chapter stays hidden.
+  CHECK_EQ(interactions.count(), 4u);
+  size_t rules = 0, dots = 0;
+  int16_t ruleY = -1, dotY = -1, firstDotX = -1, lastDotX = -1;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const FakeDrawTarget::Op& op = draw.ops[i];
+    if (op.kind != FakeDrawTarget::Op::Fill) continue;
+    if (op.rect.height == 1) {
+      ++rules;
+      ruleY = op.rect.y;
+      CHECK_EQ(op.rect.x, 36);
+      CHECK_EQ(op.rect.width, 408);
+    } else if (op.rect.width == 2 && op.rect.height == 2) {
+      ++dots;
+      dotY = op.rect.y;
+      if (firstDotX < 0) firstDotX = op.rect.x;
+      lastDotX = op.rect.x;
+    }
+  }
+  CHECK_EQ(rules, 1u);
+  CHECK_EQ(ruleY, 46);
+  // Only the row with a value runs a leader, 20px below its top (53).
+  CHECK_EQ(dotY, 73);
+  // 36 + "Status Bar" (60) + 8 to "On" at 444 - 12, less 8.
+  CHECK_EQ(firstDotX, 104);
+  CHECK_EQ(lastDotX, 420);
+  CHECK_EQ(dots, 80u);
+  // The triangle sits 14px in, centred 6px above the row's baseline (53 + 27).
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Triangle), 1u);
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    if (draw.ops[i].kind != FakeDrawTarget::Op::Triangle) continue;
+    CHECK_EQ(draw.ops[i].rect.x, 14);
+    CHECK_EQ(draw.ops[i].rect.y, 66);
+  }
+
+  char numeral[8];
+  romanNumeral(4, numeral, sizeof numeral);
+  CHECK(std::strcmp(numeral, "IV") == 0);
+  romanNumeral(39, numeral, sizeof numeral);
+  CHECK(std::strcmp(numeral, "XXXIX") == 0);
+  romanNumeral(40, numeral, sizeof numeral);
+  CHECK(numeral[0] == '\0');
+}
+
 void testListInvertedSectionHeaders() {
   // Lector classic: white header text fills a full-width black band, label
   // centred, no underline. Touch/SDK lists keep the underlined caption above.
@@ -3494,6 +3568,7 @@ int main() {
   testRotationAndBitmapSampling();
   testListSectionHeaders();
   testListInvertedSectionHeaders();
+  testListContentsLook();
   testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();

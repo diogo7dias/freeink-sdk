@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../FreeInkUICore.h"
+#include <cstdio>
 #include <algorithm>
 
 namespace freeink {
@@ -202,6 +203,16 @@ struct ListProps {
   // count; top/selection and dispatched action values are VISIBLE indexes.
   // Headers get touch targets, viewport feedback and a plus/minus indicator.
   const ListSections *sections = nullptr;
+  // Contents look: the list reads like a book's contents page. Headings carry
+  // roman numerals; the open section's heading is set large over a rule, the
+  // closed ones are single contents lines; rows run a dotted leader out to
+  // their value; the selection is a small triangle in the margin and a bold
+  // label, never a filled band. headerText is the open heading's face,
+  // labelText the rows' and contents lines' (its bold cut marks the selection).
+  // Geometry is fixed, see contentsList(). Headers draw no touch padding.
+  bool contentsLook = false;
+  TextStyle headingNumeralText{}; // numeral beside the open heading
+  TextStyle tocNumeralText{};     // numeral at the head of a contents line
 };
 
 // Stateful companion to the immediate-mode list helpers in FreeInkUICore.h:
@@ -355,10 +366,211 @@ inline void drawListScrollIndicator(DrawTarget &target, const Rect rect,
               Paint::solid(Color::Black));
 }
 
+// Upper-case roman numeral for 1..39 (more headings than a menu will ever
+// have); out-of-range writes nothing.
+inline void romanNumeral(int n, char *out, size_t size) {
+  static constexpr const char *TENS[] = {"", "X", "XX", "XXX"};
+  static constexpr const char *ONES[] = {"",  "I",  "II",  "III",  "IV",
+                                         "V", "VI", "VII", "VIII", "IX"};
+  if (size == 0)
+    return;
+  out[0] = '\0';
+  if (n < 1 || n > 39)
+    return;
+  snprintf(out, size, "%s%s", TENS[n / 10], ONES[n % 10]);
+}
+
+namespace contents {
+// Pixel geometry of the contents look, measured off the workshop mockup it
+// reproduces (lector mockups/inbook-menu-looks, option 5) at 480 wide.
+constexpr int16_t SIDE = 36;             // text inset from both edges
+constexpr int16_t ROW_H = 37;            // 6 above, a 25px line, 6 below
+constexpr int16_t ROW_BASELINE = 27;     // row top to the label baseline
+constexpr int16_t LEADER_Y = 20;         // row top to the dotted leader
+constexpr int16_t LEADER_GAP = 8;        // air between leader and text
+constexpr int16_t DOT = 2;               // leader dot size; the pitch is 2 * DOT
+constexpr int16_t HEAD_H = 53;           // 8 above, 33 line, 6, the rule, 6
+constexpr int16_t HEAD_BASELINE = 35;    // heading top to its baseline
+constexpr int16_t HEAD_RULE_Y = 46;      // heading top to its 1px rule
+constexpr int16_t HEAD_NUMERAL_GAP = 14; // numeral to heading label
+constexpr int16_t HEAD_TRACKING = 2;     // letter spacing inside the numeral
+constexpr int16_t TOC_H = 35;            // one contents line
+constexpr int16_t TOC_BASELINE = 26;     // line top to baseline
+constexpr int16_t TOC_AFTER_ROWS = 10;   // above contents lines that follow rows
+constexpr int16_t TOC_LABEL_X = 44;      // numeral column, SIDE to the label
+constexpr int16_t TOC_TRACKING = 1;
+constexpr int16_t MARKER_X = 14;         // the selection triangle's left edge
+constexpr int16_t MARKER_W = 11;
+constexpr int16_t MARKER_H = 16;
+constexpr int16_t MARKER_RAISE = 6;      // triangle centre above the baseline
+} // namespace contents
+
+// Text whose baseline sits at `baseline`, starting at x, clipped to maxW.
+inline void contentsText(DrawTarget &target, int16_t x, int16_t baseline,
+                         int16_t maxW, const char *text, TextStyle style) {
+  const int16_t lh = target.lineHeight(style.font);
+  target.text(Rect{x, static_cast<int16_t>(baseline - target.ascent(style.font)),
+                   maxW, lh},
+              text, style);
+}
+
+// A numeral drawn glyph by glyph with `tracking` after each one, as CSS
+// letter-spacing does. Returns the advance, trailing spacing included.
+inline int16_t contentsNumeral(DrawTarget &target, int16_t x, int16_t baseline,
+                               const char *numeral, TextStyle style,
+                               int16_t tracking) {
+  int16_t advance = 0;
+  for (const char *c = numeral; *c; ++c) {
+    const char glyph[2] = {*c, '\0'};
+    const int16_t w = target.measureText(style.font, glyph, style).width;
+    contentsText(target, static_cast<int16_t>(x + advance), baseline, w, glyph,
+                 style);
+    advance = static_cast<int16_t>(advance + w + tracking);
+  }
+  return advance;
+}
+
+inline void contentsMarker(DrawTarget &target, int16_t rowX, int16_t baseline,
+                           Paint paint) {
+  using namespace contents;
+  const int16_t x = static_cast<int16_t>(rowX + MARKER_X);
+  const int16_t cy = static_cast<int16_t>(baseline - MARKER_RAISE);
+  target.triangle(Point{x, static_cast<int16_t>(cy - MARKER_H / 2)},
+                  Point{x, static_cast<int16_t>(cy + MARKER_H / 2)},
+                  Point{static_cast<int16_t>(x + MARKER_W), cy}, paint);
+}
+
+// The contents look (ListProps::contentsLook). Same contract as list(): the
+// sections map visible indexes, rows register hits, and the nav hears back
+// what fit.
+template <size_t MaxInteractions>
+void contentsList(Frame<MaxInteractions> &frame, Rect rect,
+                  const ListProps &props) {
+  using namespace contents;
+  DrawTarget &target = frame.target();
+  const uint16_t count = props.sections
+      ? static_cast<uint16_t>(props.sections->visibleCount(props.items, props.count))
+      : props.count;
+  uint16_t top = props.topIndex < count ? props.topIndex : 0;
+  const int16_t right = static_cast<int16_t>(rect.right() - SIDE);
+  const int16_t textX = static_cast<int16_t>(rect.x + SIDE);
+  int16_t y = rect.y;
+  uint16_t consumed = 0;
+  bool selectedDrawn = false;
+  bool afterRow = false;
+  char numeral[8];
+
+  for (uint16_t i = top; i < count; ++i) {
+    const int itemIndex = props.sections
+        ? props.sections->itemIndex(props.items, props.count, i)
+        : i;
+    if (itemIndex < 0)
+      break;
+    const ListItem &item = props.items[itemIndex];
+    const bool selected = props.selectedIndex == static_cast<int16_t>(i);
+    Rect slot{rect.x, y, rect.width, 0};
+    int16_t baseline = 0;
+
+    if (item.isHeader) {
+      // ponytail: counts headings from the start on every header, fine for
+      // menu-sized lists.
+      int ordinal = 0;
+      for (int h = 0; h <= itemIndex; ++h)
+        if (props.items[h].isHeader)
+          ++ordinal;
+      romanNumeral(ordinal, numeral, sizeof numeral);
+      const bool open = !props.sections || props.sections->expandedHeader == itemIndex;
+      if (open) {
+        slot.height = HEAD_H;
+        if (slot.bottom() > rect.bottom())
+          break;
+        baseline = static_cast<int16_t>(y + HEAD_BASELINE);
+        const int16_t numW = contentsNumeral(target, textX, baseline, numeral,
+                                             props.headingNumeralText, HEAD_TRACKING);
+        const int16_t labelX = static_cast<int16_t>(textX + numW + HEAD_NUMERAL_GAP);
+        contentsText(target, labelX, baseline, static_cast<int16_t>(right - labelX),
+                     item.label, props.headerText);
+        target.fill(Rect{textX, static_cast<int16_t>(y + HEAD_RULE_Y),
+                         static_cast<int16_t>(right - textX), 1},
+                    Paint::solid(Color::Black));
+      } else {
+        const int16_t gap = afterRow ? TOC_AFTER_ROWS : 0;
+        slot.height = static_cast<int16_t>(TOC_H + gap);
+        if (slot.bottom() > rect.bottom())
+          break;
+        baseline = static_cast<int16_t>(y + gap + TOC_BASELINE);
+        contentsNumeral(target, textX, baseline, numeral, props.tocNumeralText,
+                        TOC_TRACKING);
+        TextStyle label = props.labelText;
+        label.bold = selected;
+        const int16_t labelX = static_cast<int16_t>(textX + TOC_LABEL_X);
+        contentsText(target, labelX, baseline, static_cast<int16_t>(right - labelX),
+                     item.label, label);
+      }
+      afterRow = false;
+    } else {
+      slot.height = ROW_H;
+      if (slot.bottom() > rect.bottom())
+        break;
+      baseline = static_cast<int16_t>(y + ROW_BASELINE);
+      TextStyle label = props.labelText;
+      TextStyle value = props.valueText;
+      label.bold = value.bold = selected;
+      int16_t valueX = right;
+      if (item.value && item.value[0]) {
+        // Values are set in lower case ("on", "portrait"), part of the look.
+        // ASCII only; other scripts keep their own case.
+        char lower[32];
+        snprintf(lower, sizeof lower, "%s", item.value);
+        for (char *c = lower; *c; ++c)
+          if (*c >= 'A' && *c <= 'Z')
+            *c = static_cast<char>(*c - 'A' + 'a');
+        valueX = static_cast<int16_t>(
+            right - target.measureText(value.font, lower, value).width);
+        contentsText(target, valueX, baseline, static_cast<int16_t>(right - valueX),
+                     lower, value);
+      }
+      const int16_t labelW = target.measureText(label.font, item.label, label).width;
+      const int16_t labelMax = static_cast<int16_t>(
+          valueX - textX - (valueX < right ? LEADER_GAP : 0));
+      contentsText(target, textX, baseline, labelMax, item.label, label);
+      if (valueX < right) {
+        // Dots from after the label to before the value, whole dots only.
+        const int16_t from = static_cast<int16_t>(textX + labelW + LEADER_GAP);
+        const int16_t to = static_cast<int16_t>(valueX - LEADER_GAP);
+        for (int16_t dx = from; dx + DOT <= to; dx = static_cast<int16_t>(dx + DOT * 2))
+          target.fill(Rect{dx, static_cast<int16_t>(y + LEADER_Y), DOT, DOT},
+                      Paint::solid(Color::Black));
+      }
+      afterRow = true;
+    }
+
+    if (selected) {
+      contentsMarker(target, rect.x, baseline, props.markerPaint);
+      selectedDrawn = true;
+    }
+    if (props.action != NO_ACTION && item.enabled) {
+      const int16_t value = props.sections ? static_cast<int16_t>(i) : item.actionValue;
+      frame.hit(ensureMinTouchRect(slot, frame.device().minTouchSize, frame.screen()),
+                props.action, value, props.inputMask,
+                selected ? StateSelected : StateNormal);
+    }
+    y = static_cast<int16_t>(y + slot.height);
+    ++consumed;
+  }
+
+  if (props.nav)
+    props.nav->onListRendered(top, consumed, selectedDrawn);
+}
+
 template <size_t MaxInteractions>
 void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   if (!props.items || props.count == 0)
     return;
+  if (props.contentsLook) {
+    contentsList(frame, rect, props);
+    return;
+  }
   // Accordion mapping needs the entire source array, never a virtual window.
   if (props.sections && (props.itemsWindowFirst != 0 ||
       (props.itemsWindowCount != 0 && props.itemsWindowCount < props.count)))
