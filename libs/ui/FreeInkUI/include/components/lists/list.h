@@ -2,6 +2,7 @@
 
 #include "../../FreeInkUICore.h"
 #include <algorithm>
+#include <cstdio>
 
 namespace freeink {
 namespace ui {
@@ -17,6 +18,9 @@ struct ListItem {
   bool enabled = true;
   // Section header row: non-interactive unless ListProps::sections is set.
   bool isHeader = false;
+  // Small label inside a section (a group of its rows): never selected, never
+  // opened or closed, shown and hidden with the rows around it.
+  bool isSubheader = false;
   // On/off row: a switch (toggle-row visuals) replaces the value slot; the
   // value string is ignored when set. Activation stays row-level via action.
   bool toggle = false;
@@ -69,6 +73,14 @@ struct ListSections {
     if (index < 0) return -1;
     expandedHeader = headerFor(items, index);
     return visibleIndex(items, count, index);
+  }
+
+  // Rows a header opens onto, its group labels not counted.
+  int rowsUnder(const ListItem *items, int count, int header) const {
+    int rows = 0;
+    for (int i = header + 1; i < count && !items[i].isHeader; ++i)
+      if (!items[i].isSubheader) ++rows;
+    return rows;
   }
 
   // -1 means nothing was open, so the caller can leave the screen.
@@ -190,6 +202,9 @@ struct ListProps {
   // gets a short band; padding is per side around the glyphs.
   bool headerFillHugsText = false;
   int16_t headerFillPadX = 8;
+  // ListItem::isSubheader rows. 0 = subheaderText line height + 10.
+  TextStyle subheaderText{};
+  int16_t subheaderRowHeight = 0;
   // Optional viewport-feedback channel: when set, list() reports the laid-out
   // viewport back to the nav (effective top, indexes that actually fit,
   // whether the selected row was drawn). Variable-height rows (wrapped
@@ -355,6 +370,68 @@ inline void drawListScrollIndicator(DrawTarget &target, const Rect rect,
               Paint::solid(Color::Black));
 }
 
+// A heading of the opt-in accordion: a full-width row between 2px rules, the
+// label at the left, and at the right edge how many rows it hides beside a
+// boxed plus (a minus once open). Selected, it fills black like a selected row.
+// Geometry scales with the heading font: an 18px sign with 3px strokes at 24px.
+template <size_t MaxInteractions>
+void drawAccordionHeader(Frame<MaxInteractions> &frame, Rect rect, Rect rowArea, int16_t sidePad, int16_t y,
+                         int16_t height, int16_t touchPad, const ListProps &props, const ListItem &item,
+                         int itemIndex, uint16_t visibleIndex, bool lastRow) {
+  DrawTarget &target = frame.target();
+  const bool open = props.sections->expandedHeader == itemIndex;
+  const bool selected = props.selectedIndex == static_cast<int16_t>(visibleIndex);
+  const Paint black = Paint::solid(Color::Black);
+  const Paint ink = Paint::solid(selected ? Color::White : Color::Black);
+  constexpr int16_t rule = 2;
+  if (selected) target.fill(Rect{rect.x, y, rect.width, height}, black);
+  target.fill(Rect{rect.x, y, rect.width, rule}, black);
+  if (open || lastRow)
+    target.fill(Rect{rect.x, static_cast<int16_t>(y + height - rule), rect.width, rule}, black);
+
+  const int16_t lh = target.lineHeight(props.headerText.font);
+  const int16_t sign = static_cast<int16_t>(std::max(9, lh * 3 / 4));
+  const int16_t stroke = static_cast<int16_t>(std::max(1, sign / 6));
+  constexpr int16_t boxPad = 5;
+  const int16_t box = static_cast<int16_t>(sign + (boxPad + rule) * 2);
+  const int16_t boxX = static_cast<int16_t>(rowArea.x + rowArea.width - sidePad - box);
+  const int16_t boxY = static_cast<int16_t>(y + (height - box) / 2);
+  target.fill(Rect{boxX, boxY, box, rule}, ink);
+  target.fill(Rect{boxX, static_cast<int16_t>(boxY + box - rule), box, rule}, ink);
+  target.fill(Rect{boxX, boxY, rule, box}, ink);
+  target.fill(Rect{static_cast<int16_t>(boxX + box - rule), boxY, rule, box}, ink);
+  const int16_t signX = static_cast<int16_t>(boxX + rule + boxPad);
+  const int16_t signY = static_cast<int16_t>(boxY + rule + boxPad);
+  target.fill(Rect{signX, static_cast<int16_t>(signY + (sign - stroke) / 2), sign, stroke}, ink);
+  if (!open)
+    target.fill(Rect{static_cast<int16_t>(signX + (sign - stroke) / 2), signY, stroke, sign}, ink);
+
+  int16_t labelRight = static_cast<int16_t>(boxX - props.textGap);
+  if (!open) {
+    char count[8];
+    snprintf(count, sizeof(count), "%d", props.sections->rowsUnder(props.items, props.count, itemIndex));
+    TextStyle style = props.valueText;
+    style.align = TextAlign::Right;
+    style.color = selected ? Color::White : Color::Black;
+    const int16_t countW = target.measureText(style.font, count, style).width;
+    labelRight = static_cast<int16_t>(boxX - props.textGap * 2 - countW);
+    target.text(Rect{labelRight, y, countW, height}, count, style);
+    labelRight = static_cast<int16_t>(labelRight - props.textGap);
+  }
+  TextStyle label = props.headerText;
+  label.color = selected ? Color::White : Color::Black;
+  const int16_t labelX = static_cast<int16_t>(rowArea.x + sidePad);
+  target.text(Rect{labelX, y, static_cast<int16_t>(std::max<int>(0, labelRight - labelX)), height}, item.label, label);
+
+  if (props.action != NO_ACTION && item.enabled) {
+    frame.hit(ensureMinTouchRect(Rect{rowArea.x, static_cast<int16_t>(y - touchPad), rowArea.width,
+                                      static_cast<int16_t>(height + touchPad * 2)},
+                                 frame.device().minTouchSize, frame.screen()),
+              props.action, static_cast<int16_t>(visibleIndex), props.inputMask,
+              selected ? StateSelected : StateNormal);
+  }
+}
+
 template <size_t MaxInteractions>
 void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   if (!props.items || props.count == 0)
@@ -444,7 +521,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       cursorY = static_cast<int16_t>(cursorY + pad + touchPad);
       if (props.sections && props.selectedIndex == static_cast<int16_t>(i))
         selectedDrawn = true;
-      const int16_t indicatorW = props.sections ? headerLh : 0;
+      if (props.sections) {
+        drawAccordionHeader(frame, rect, rowArea, sidePad, cursorY, headerH, touchPad, props, item, itemIndex, i,
+                            static_cast<uint16_t>(i + 1) == count);
+        cursorY = static_cast<int16_t>(cursorY + headerH + rowGap + touchPad);
+        continue;
+      }
       Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
                      static_cast<int16_t>(rowArea.width - sidePad * 2), headerH};
       if (props.headerText.color == Color::White) {
@@ -457,7 +539,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
           const int16_t textW =
               frame.target().measureText(props.headerText.font, item.label, props.headerText).width;
           const int16_t bandW = static_cast<int16_t>(
-              std::min<int32_t>(textW + indicatorW + props.headerFillPadX * 2, rect.width));
+              std::min<int32_t>(textW + props.headerFillPadX * 2, rect.width));
           int16_t bandX = static_cast<int16_t>(rowArea.x + sidePad - props.headerFillPadX);
           if (props.headerText.align == TextAlign::Center) {
             bandX = static_cast<int16_t>(rect.x + (rect.width - bandW) / 2);
@@ -468,32 +550,8 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
           if (bandX < rect.x) bandX = rect.x;
           if (bandX + bandW > rect.x + rect.width) bandX = static_cast<int16_t>(rect.x + rect.width - bandW);
           fill = Rect{bandX, cursorY, bandW, headerH};
-          if (props.sections) {
-            headerRow.x = static_cast<int16_t>(bandX + props.headerFillPadX);
-            headerRow.width = static_cast<int16_t>(std::max<int>(0, bandW - props.headerFillPadX * 2));
-          }
         }
         frame.target().fill(fill, Paint::solid(Color::Black));
-      }
-      if (props.sections) {
-        // Geometric plus/minus: no strings, font glyph dependency or allocation.
-        const int16_t size = static_cast<int16_t>(std::min<int>(indicatorW, headerRow.width) / 2);
-        const int16_t x = headerRow.x;
-        const int16_t y = static_cast<int16_t>(cursorY + headerH / 2);
-        const Paint ink = Paint::solid(props.headerText.color);
-        frame.target().fill(Rect{x, y, size, 1}, ink);
-        if (props.sections->expandedHeader != itemIndex)
-          frame.target().fill(Rect{static_cast<int16_t>(x + size / 2),
-                                  static_cast<int16_t>(y - size / 2), 1, size}, ink);
-        headerRow.x = static_cast<int16_t>(headerRow.x + indicatorW);
-        headerRow.width = static_cast<int16_t>(std::max<int>(0, headerRow.width - indicatorW));
-        if (props.action != NO_ACTION && item.enabled) {
-          frame.hit(ensureMinTouchRect(Rect{rowArea.x, static_cast<int16_t>(cursorY - touchPad), rowArea.width,
-                                          static_cast<int16_t>(headerH + touchPad * 2)},
-                                      frame.device().minTouchSize, frame.screen()),
-                    props.action, static_cast<int16_t>(i), props.inputMask,
-                    props.selectedIndex == static_cast<int16_t>(i) ? StateSelected : StateNormal);
-        }
       }
       frame.target().text(headerRow, item.label, props.headerText);
       if (props.headerUnderline) {
@@ -503,6 +561,21 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                             Paint::solid(props.headerText.color));
       }
       cursorY = static_cast<int16_t>(cursorY + headerH + rowGap + touchPad);
+      continue;
+    }
+    if (item.isSubheader) {
+      const int16_t subLh = frame.target().lineHeight(props.subheaderText.font);
+      const int16_t subRowH = props.subheaderRowHeight > 0 ? props.subheaderRowHeight
+                                                           : static_cast<int16_t>(subLh + 10);
+      if (static_cast<int16_t>(cursorY + subRowH) > rowArea.bottom())
+        break;
+      ++consumedIndexes;
+      // Sits low in its band, against the rows it names.
+      frame.target().text(Rect{static_cast<int16_t>(rowArea.x + sidePad),
+                               static_cast<int16_t>(cursorY + subRowH - subLh - 3),
+                               static_cast<int16_t>(rowArea.width - sidePad * 2), subLh},
+                          item.label, props.subheaderText);
+      cursorY = static_cast<int16_t>(cursorY + subRowH + rowGap);
       continue;
     }
     // Per-item height: text whose style allows wrapping (maxLines > 1) and
