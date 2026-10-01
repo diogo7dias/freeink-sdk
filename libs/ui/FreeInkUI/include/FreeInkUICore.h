@@ -583,6 +583,9 @@ struct BoxStyle {
   uint8_t borderWidth = 0;
   uint8_t radius = 0;
   uint8_t corners = CornersAll;
+  // Which sides the border draws, and whether as dashes rather than a line.
+  uint8_t borderEdges = EdgesAll;
+  bool borderDashed = false;
 };
 
 struct StyleSet {
@@ -1706,14 +1709,41 @@ inline BitmapRef lucideDeleteIcon16() {
   return BitmapRef{bits, 16, 16, BitmapFormat::Mask1};
 }
 
+// One straight band of a dashed border: dashes of kDash with kGap between,
+// along x when horizontal.
+inline void fillDashed(DrawTarget &target, Rect band, Paint paint,
+                       bool horizontal) {
+  constexpr int16_t kDash = 6;
+  constexpr int16_t kGap = 4;
+  const int16_t length = horizontal ? band.width : band.height;
+  for (int16_t at = 0; at < length; at = static_cast<int16_t>(at + kDash + kGap)) {
+    const int16_t run = static_cast<int16_t>(length - at < kDash ? length - at : kDash);
+    target.fill(horizontal ? Rect{static_cast<int16_t>(band.x + at), band.y, run, band.height}
+                           : Rect{band.x, static_cast<int16_t>(band.y + at), band.width, run},
+                paint);
+  }
+}
+
 inline void drawBorderEdges(DrawTarget &target, Rect rect, Paint paint,
                             uint8_t width, uint8_t radius, uint8_t corners,
-                            uint8_t edges) {
+                            uint8_t edges, bool dashed = false) {
   if (paint.kind == PaintKind::None || width == 0 || edges == EdgesNone ||
       rect.empty())
     return;
-  if ((edges & EdgesAll) == EdgesAll) {
+  if ((edges & EdgesAll) == EdgesAll && !dashed) {
     target.stroke(rect, paint, width, radius, corners);
+    return;
+  }
+  if (dashed) {
+    const int16_t w = static_cast<int16_t>(width);
+    if (edges & EdgeTop)
+      fillDashed(target, Rect{rect.x, rect.y, rect.width, w}, paint, true);
+    if (edges & EdgeBottom)
+      fillDashed(target, Rect{rect.x, static_cast<int16_t>(rect.bottom() - w), rect.width, w}, paint, true);
+    if (edges & EdgeLeft)
+      fillDashed(target, Rect{rect.x, rect.y, w, rect.height}, paint, false);
+    if (edges & EdgeRight)
+      fillDashed(target, Rect{static_cast<int16_t>(rect.right() - w), rect.y, w, rect.height}, paint, false);
     return;
   }
   // Axis-aligned edges draw as exact fill bands INSIDE the rect: a thick

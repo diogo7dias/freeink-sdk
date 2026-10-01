@@ -18,9 +18,6 @@ struct ListItem {
   bool enabled = true;
   // Section header row: non-interactive unless ListProps::sections is set.
   bool isHeader = false;
-  // Small label inside a section (a group of its rows): never selected, never
-  // opened or closed, shown and hidden with the rows around it.
-  bool isSubheader = false;
   // On/off row: a switch (toggle-row visuals) replaces the value slot; the
   // value string is ignored when set. Activation stays row-level via action.
   bool toggle = false;
@@ -75,11 +72,10 @@ struct ListSections {
     return visibleIndex(items, count, index);
   }
 
-  // Rows a header opens onto, its group labels not counted.
+  // Rows a header opens onto.
   int rowsUnder(const ListItem *items, int count, int header) const {
     int rows = 0;
-    for (int i = header + 1; i < count && !items[i].isHeader; ++i)
-      if (!items[i].isSubheader) ++rows;
+    for (int i = header + 1; i < count && !items[i].isHeader; ++i) ++rows;
     return rows;
   }
 
@@ -202,9 +198,6 @@ struct ListProps {
   // gets a short band; padding is per side around the glyphs.
   bool headerFillHugsText = false;
   int16_t headerFillPadX = 8;
-  // ListItem::isSubheader rows. 0 = subheaderText line height + 10.
-  TextStyle subheaderText{};
-  int16_t subheaderRowHeight = 0;
   // Optional viewport-feedback channel: when set, list() reports the laid-out
   // viewport back to the nav (effective top, indexes that actually fit,
   // whether the selected row was drawn). Variable-height rows (wrapped
@@ -563,21 +556,6 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       cursorY = static_cast<int16_t>(cursorY + headerH + rowGap + touchPad);
       continue;
     }
-    if (item.isSubheader) {
-      const int16_t subLh = frame.target().lineHeight(props.subheaderText.font);
-      const int16_t subRowH = props.subheaderRowHeight > 0 ? props.subheaderRowHeight
-                                                           : static_cast<int16_t>(subLh + 10);
-      if (static_cast<int16_t>(cursorY + subRowH) > rowArea.bottom())
-        break;
-      ++consumedIndexes;
-      // Sits low in its band, against the rows it names.
-      frame.target().text(Rect{static_cast<int16_t>(rowArea.x + sidePad),
-                               static_cast<int16_t>(cursorY + subRowH - subLh - 3),
-                               static_cast<int16_t>(rowArea.width - sidePad * 2), subLh},
-                          item.label, props.subheaderText);
-      cursorY = static_cast<int16_t>(cursorY + subRowH + rowGap);
-      continue;
-    }
     // Per-item height: text whose style allows wrapping (maxLines > 1) and
     // that overflows its slot grows the row by exactly the extra lines it
     // USES — measured, not maxLines: a two-line title in a three-line budget
@@ -695,10 +673,8 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       setStyleRadius(styles, props.rowRadius);
     const BoxStyle &style = styles.resolve(state);
     frame.target().fill(row, style.background, style.radius, style.corners);
-    if (style.border.kind != PaintKind::None && style.borderWidth > 0) {
-      frame.target().stroke(row, style.border, style.borderWidth, style.radius,
-                            style.corners);
-    }
+    drawBorderEdges(frame.target(), row, style.border, style.borderWidth, style.radius,
+                    style.corners, style.borderEdges, style.borderDashed);
 
     Rect content = row.inset(Insets{0, sidePad, 0, sidePad});
 
@@ -888,10 +864,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         const BoxStyle &style =
             styles.resolve(item.enabled ? StateNormal : StateDisabled);
         frame.target().fill(row, style.background, style.radius, style.corners);
-        if (style.border.kind != PaintKind::None && style.borderWidth > 0) {
-          frame.target().stroke(row, style.border, style.borderWidth,
-                                style.radius, style.corners);
-        }
+        drawBorderEdges(frame.target(), row, style.border, style.borderWidth,
+                        style.radius, style.corners, style.borderEdges,
+                        style.borderDashed);
 
         Rect content = row.inset(Insets{0, sidePad, 0, sidePad});
         TextStyle labelStyle =

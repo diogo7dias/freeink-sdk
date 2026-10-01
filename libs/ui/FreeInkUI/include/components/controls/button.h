@@ -50,7 +50,7 @@ void button(Frame<MaxInteractions>& frame, Rect rect, const ButtonProps& props) 
   frame.target().fill(rect, style.background, style.radius, style.corners);
   if (style.border.kind != PaintKind::None && style.borderWidth > 0) {
     drawBorderEdges(frame.target(), rect, style.border, style.borderWidth, style.radius, style.corners,
-                    props.borderEdges);
+                    static_cast<uint8_t>(props.borderEdges & style.borderEdges), style.borderDashed);
   }
 
   Rect content = rect.inset(Insets{2, 4, 2, 4});
