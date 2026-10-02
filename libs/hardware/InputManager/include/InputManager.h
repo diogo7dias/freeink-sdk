@@ -107,6 +107,16 @@ class InputManager {
 
   // True if this board has a touch controller configured.
   bool hasTouch() const;
+  // Park the GT911 in its Sleep mode (true) or bring it back (false). Sleep
+  // takes it from ~3.3 mA (its own idle "green" mode) to under 0.12 mA, and the
+  // host stops polling it, so the chip is free to light-sleep between button
+  // presses. A sleeping controller sees no touches and no Home key: only a
+  // physical button can end it. Goodix sequence, as the Linux goodix driver
+  // runs it: INT low + 0x05 to 0x8040 to sleep; INT high 2-5 ms, low 50 ms,
+  // then released to wake. The wake finishes inside later update() calls, so it
+  // never blocks a poll. No-op on other controllers, mid-contact, or mid-wake.
+  void setTouchAsleep(bool asleep);
+  bool isTouchAsleep() const { return touchPower == TouchPower::Asleep; }
   // True only while a GT911 controller is present. Other touch controllers
   // retain their existing single-contact contract.
   bool supportsMultiTouch() const;
@@ -356,6 +366,10 @@ class InputManager {
   uint8_t twoButtonPhysicalState;
   unsigned long twoButtonPressStart;
   bool twoButtonLongPressActive;
+
+  enum class TouchPower : uint8_t { Awake, Asleep, WakePulse, WakeSync };
+  TouchPower touchPower = TouchPower::Awake;
+  unsigned long touchPowerAt = 0;  // Asleep: when it slept. WakeSync: when INT may be released.
 
   bool touchDataEnabled = false;         // I2C up, controller present
   uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)
