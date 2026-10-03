@@ -2,6 +2,11 @@
 
 #if FREEINK_CAP_USB_MSC
 
+#if !__has_include(<tinyusb.h>)
+#error \
+    "FREEINK_CAP_USB_MSC needs espressif/esp_tinyusb: add the component (with CONFIG_TINYUSB_MSC_ENABLED) and put its include dirs and libs on the build"
+#endif
+
 #include <Arduino.h>
 #include <esp_pm.h>
 #include <tinyusb.h>
@@ -12,8 +17,8 @@
 #include <atomic>
 #include <cstring>
 
-// Built on esp_tinyusb (the IDF component, added to the core rebuild) rather than
-// Arduino's USBMSC, whose TinyUSB layer only the prebuilt Arduino libs carry. The SCSI
+// Built on esp_tinyusb (the IDF component) rather than Arduino's USBMSC, so it also
+// works in builds that rebuild the Arduino core without its TinyUSB layer. The SCSI
 // callbacks below are TinyUSB's own. esp_tinyusb's MSC glue (tinyusb_msc.c, a FATFS
 // storage layer) stays out of the link because the two hooks its driver core calls are
 // defined here; were it linked anyway, its tud_msc_* would clash with these at link time.
@@ -160,8 +165,9 @@ int32_t tud_msc_write10_cb(uint8_t, uint32_t lba, uint32_t offset, uint8_t* buff
   return freeink::mscWrite(lba, offset, buffer, bufsize);
 }
 
-int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void*, uint16_t) {
-  if (scsi_cmd[0] == SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL) return 0;
+int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const /*scsi_cmd*/[16], void*, uint16_t) {
+  // TinyUSB answers the commands a host needs (including PREVENT ALLOW MEDIUM
+  // REMOVAL) itself; only the rest arrive here.
   tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);  // invalid command operation code
   return -1;
 }
@@ -173,8 +179,14 @@ namespace freeink {
 bool UsbMassStorage::begin(FsBlockDeviceInterface* dev) {
   if (_active || !dev || dev->sectorCount() == 0) return false;
 
-  if (!gNoSleepLock && esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usb_msc", &gNoSleepLock) != ESP_OK) {
-    gNoSleepLock = nullptr;
+  if (!gNoSleepLock) {
+    const esp_err_t err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usb_msc", &gNoSleepLock);
+    if (err != ESP_OK) {
+      gNoSleepLock = nullptr;
+      if (err != ESP_ERR_NOT_SUPPORTED && Serial) {
+        Serial.printf("[%lu] [USB] no-light-sleep lock failed: %s\n", millis(), esp_err_to_name(err));
+      }
+    }
   }
   if (gNoSleepLock) esp_pm_lock_acquire(gNoSleepLock);
 
@@ -196,7 +208,9 @@ bool UsbMassStorage::begin(FsBlockDeviceInterface* dev) {
 
 void UsbMassStorage::end() {
   if (!_active) return;
-  tinyusb_driver_uninstall();
+  const esp_err_t err = tinyusb_driver_uninstall();
+  if (err != ESP_OK && Serial)
+    Serial.printf("[%lu] [USB] TinyUSB uninstall failed: %s\n", millis(), esp_err_to_name(err));
   if (gNoSleepLock) esp_pm_lock_release(gNoSleepLock);
   gOwner.store(nullptr);
   gDev.store(nullptr);
