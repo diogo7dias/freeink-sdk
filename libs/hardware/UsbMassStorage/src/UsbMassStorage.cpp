@@ -3,20 +3,26 @@
 #if FREEINK_CAP_USB_MSC
 
 #include <Arduino.h>
-#include <USB.h>
-#include <USBMSC.h>
+#include <esp_pm.h>
+#include <tinyusb.h>
+#include <tinyusb_default_config.h>
+#include <tusb.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 
-extern "C" bool tud_mounted(void);
-extern "C" bool tud_disconnect(void);
+// Built on esp_tinyusb (the IDF component, added to the core rebuild) rather than
+// Arduino's USBMSC, whose TinyUSB layer only the prebuilt Arduino libs carry. The SCSI
+// callbacks below are TinyUSB's own. esp_tinyusb's MSC glue (tinyusb_msc.c, a FATFS
+// storage layer) stays out of the link because the two hooks its driver core calls are
+// defined here; were it linked anyway, its tud_msc_* would clash with these at link time.
+extern "C" void msc_storage_mount_to_usb(void) {}
+extern "C" void msc_storage_mount_to_app(void) {}
 
 namespace freeink {
 namespace {
 
-USBMSC gMsc;
 std::atomic<UsbMassStorage*> gOwner{nullptr};
 std::atomic<FsBlockDeviceInterface*> gDev{nullptr};
 constexpr uint16_t kBlockSize = 512;
@@ -112,42 +118,76 @@ int32_t mscWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsiz
   return static_cast<int32_t>(bufsize);
 }
 
-bool mscStartStop(uint8_t /*power_condition*/, bool start, bool load_eject) {
+// USB Drive keeps the chip out of automatic light sleep: the USB-OTG link does not
+// survive it. Created on first use; null when power management is compiled out.
+esp_pm_lock_handle_t gNoSleepLock = nullptr;
+
+}  // namespace
+}  // namespace freeink
+
+extern "C" {
+
+void tud_msc_inquiry_cb(uint8_t, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4]) {
+  memcpy(vendor_id, "FreeInk ", 8);
+  memcpy(product_id, "SD Card         ", 16);
+  memcpy(product_rev, "1.0 ", 4);
+}
+
+bool tud_msc_test_unit_ready_cb(uint8_t lun) {
+  if (freeink::gDev.load()) return true;
+  tud_msc_set_sense(lun, SCSI_SENSE_NOT_READY, 0x3A, 0x00);  // medium not present
+  return false;
+}
+
+void tud_msc_capacity_cb(uint8_t, uint32_t* block_count, uint16_t* block_size) {
+  auto* const dev = freeink::gDev.load();
+  *block_count = dev ? dev->sectorCount() : 0;
+  *block_size = freeink::kBlockSize;
+}
+
+bool tud_msc_start_stop_cb(uint8_t, uint8_t, bool start, bool load_eject) {
   if (load_eject && !start) {
-    if (auto* const owner = gOwner.load()) owner->markEjected();
+    if (auto* const owner = freeink::gOwner.load()) owner->markEjected();
   }
   return true;
 }
 
-}  // namespace
+int32_t tud_msc_read10_cb(uint8_t, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
+  return freeink::mscRead(lba, offset, buffer, bufsize);
+}
+
+int32_t tud_msc_write10_cb(uint8_t, uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
+  return freeink::mscWrite(lba, offset, buffer, bufsize);
+}
+
+int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void*, uint16_t) {
+  if (scsi_cmd[0] == SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL) return 0;
+  tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);  // invalid command operation code
+  return -1;
+}
+
+}  // extern "C"
+
+namespace freeink {
 
 bool UsbMassStorage::begin(FsBlockDeviceInterface* dev) {
   if (_active || !dev || dev->sectorCount() == 0) return false;
+
+  if (!gNoSleepLock && esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usb_msc", &gNoSleepLock) != ESP_OK) {
+    gNoSleepLock = nullptr;
+  }
+  if (gNoSleepLock) esp_pm_lock_acquire(gNoSleepLock);
 
   gDev.store(dev);
   gOwner.store(this);
   _state.store(UsbMassStorageState::WaitingForHost);
   _hostSeen.store(false);
-  gMsc.vendorID("FreeInk");
-  gMsc.productID("SD Card");
-  gMsc.productRevision("1.0");
-  gMsc.mediaPresent(true);
-  gMsc.isWritable(true);
-  gMsc.onStartStop(mscStartStop);
-  gMsc.onRead(mscRead);
-  gMsc.onWrite(mscWrite);
-  if (!gMsc.begin(dev->sectorCount(), kBlockSize)) {
-    gMsc.end();
+  const tinyusb_config_t config = TINYUSB_DEFAULT_CONFIG();
+  if (tinyusb_driver_install(&config) != ESP_OK) {
     gOwner.store(nullptr);
     gDev.store(nullptr);
     _state.store(UsbMassStorageState::Idle);
-    return false;
-  }
-  if (!USB.begin()) {
-    gMsc.end();
-    gOwner.store(nullptr);
-    gDev.store(nullptr);
-    _state.store(UsbMassStorageState::Idle);
+    if (gNoSleepLock) esp_pm_lock_release(gNoSleepLock);
     return false;
   }
   _active = true;
@@ -156,7 +196,8 @@ bool UsbMassStorage::begin(FsBlockDeviceInterface* dev) {
 
 void UsbMassStorage::end() {
   if (!_active) return;
-  gMsc.end();
+  tinyusb_driver_uninstall();
+  if (gNoSleepLock) esp_pm_lock_release(gNoSleepLock);
   gOwner.store(nullptr);
   gDev.store(nullptr);
   _active = false;
