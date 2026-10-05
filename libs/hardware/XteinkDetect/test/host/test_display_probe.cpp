@@ -135,7 +135,9 @@ int main() {
     assert(applyXteinkDisplayController());
     assert(BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8179);
   }
-  for (uint8_t id : {uint8_t(0x02), uint8_t(0x41), uint8_t(0x42), uint8_t(0x68), uint8_t(0x69)}) {
+  // 0x03/0x67: X4 Pro 260917 stock registry (QY-class; OTP-only).
+  for (uint8_t id : {uint8_t(0x02), uint8_t(0x03), uint8_t(0x41), uint8_t(0x42), uint8_t(0x67), uint8_t(0x68),
+                     uint8_t(0x69)}) {
     reset(B::XteinkX4, {0,0,id,0xff,0xff}, false);
     assert(applyXteinkDisplayController());
     assert(BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279);

@@ -414,16 +414,20 @@ bool applyXteinkDisplayController() {
       // tells them apart per the stock panel table (X4C V7.1.21, keys 0x100|id):
       // 0x01 QY / 0x40 BOE 4.28 = UC8179; 0x02 QY / 0x68 ZHX 4.28 / 0x69 ZHX 4.42
       // (reserved) / 0x41 BOE 4.28 D / 0x42 BOE 4.28 E = UC8279 (800x480
-      // variant). Anything else is unrecognized — take the UC8179 driver, the
-      // variant every unit benched so far has carried (observed VER=00 00 01 FF FF).
+      // variant). The X4 Pro 260917 stock registry adds 0x03 (QY-class UC8279,
+      // shares the 0x02 tables) and 0x67 (UC8279 driven from OTP only: the
+      // driver keeps it B/W). Anything else is unrecognized — take the UC8179
+      // driver, the variant every unit benched so far has carried (observed
+      // VER=00 00 01 FF FF).
       const uint8_t lutVer = ver[2];
       g_probeDiag.promoted = true;
-      if (lutVer == 0x02 || lutVer == 0x41 || lutVer == 0x42 || lutVer == 0x68 || lutVer == 0x69) {
+      if (lutVer == 0x02 || lutVer == 0x03 || lutVer == 0x41 || lutVer == 0x42 || lutVer == 0x67 || lutVer == 0x68 ||
+          lutVer == 0x69) {
         BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::UC8279;
         BoardConfig::ACTIVE.displayControllerVariant = lutVer;
         if (Serial)
           Serial.printf("[%lu] [XTDET] promoted SSD1677 -> UC8279 800x480 (LUT_VER=%02X%s)\n", millis(), lutVer,
-                        lutVer == 0x69 ? ", reserved" : "");
+                        lutVer == 0x69 ? ", reserved" : lutVer == 0x67 ? ", OTP-only" : "");
       } else {
         BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::UC8179;
         BoardConfig::ACTIVE.displayControllerVariant = lutVer;
