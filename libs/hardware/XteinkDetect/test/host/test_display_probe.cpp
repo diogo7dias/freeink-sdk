@@ -128,14 +128,14 @@ int main() {
   assert(commands == (std::vector<int>{0x71,0x70,0x71,0x70,0xA2}));
   assert(getXteinkDisplayProbeDiag().verBytesRead == 5);
   assert(getXteinkDisplayProbeDiag().mtpValid);
-  // This tree's X4 LUT_VER table: 0x02/0x68/0x69 = UC8279, anything else UC8179.
-  // (Free-Ink main also maps the BOE 4.28 glass 0x41/0x42 to UC8279; not ported.)
+  // Stock panel table IDs, including the BOE 4.28 glass (0x40 UC8179,
+  // 0x41/0x42 UC8279 D/E).
   for (uint8_t id : {uint8_t(0x01), uint8_t(0x40)}) {
     reset(B::XteinkX4, {0,0,id,0xff,0xff}, false);
     assert(applyXteinkDisplayController());
     assert(BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8179);
   }
-  for (uint8_t id : {uint8_t(0x02), uint8_t(0x68), uint8_t(0x69)}) {
+  for (uint8_t id : {uint8_t(0x02), uint8_t(0x41), uint8_t(0x42), uint8_t(0x68), uint8_t(0x69)}) {
     reset(B::XteinkX4, {0,0,id,0xff,0xff}, false);
     assert(applyXteinkDisplayController());
     assert(BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279);

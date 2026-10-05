@@ -85,7 +85,8 @@ const uint8_t kXtfPreBwMid[5][PREBW_LUT_LEN + 1] = {
 
 const GrayLut* selectAaLuts() {
   // LUT_VER stored by the boot probe. 0x02 has its own table; 0x68 is the newer
-  // set. Reserved 0x69 (and anything unknown) falls back to the 0x68 bytes —
+  // (ZHX) set, which stock X4C V7.1.21 also points BOE 4.28 D/E (0x41/0x42) at.
+  // Reserved 0x69 (and anything unknown) falls back to the 0x68 bytes too —
   // the reference defines no AA waveform for it, and its init/built-in paths
   // are identical.
   return BoardConfig::ACTIVE.displayControllerVariant == 0x02 ? kXtfAa02 : kXtfAa68;

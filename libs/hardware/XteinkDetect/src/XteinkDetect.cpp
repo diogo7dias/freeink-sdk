@@ -411,13 +411,14 @@ bool applyXteinkDisplayController() {
   switch (BoardConfig::ACTIVE.displayController) {
     case BoardConfig::DisplayController::SSD1677: {
       // X4-family boards can carry either UltraChip part; VER byte2 (LUT_VER)
-      // tells them apart per the vendor reference: 0x01 = UC8179, 0x02/0x68 =
-      // UC8279 (800x480 variant), 0x69 = reserved UC8279. Anything else is
-      // unrecognized — take the UC8179 driver, the variant every unit benched
-      // so far has carried (observed VER=00 00 01 FF FF).
+      // tells them apart per the stock panel table (X4C V7.1.21, keys 0x100|id):
+      // 0x01 QY / 0x40 BOE 4.28 = UC8179; 0x02 QY / 0x68 ZHX 4.28 / 0x69 ZHX 4.42
+      // (reserved) / 0x41 BOE 4.28 D / 0x42 BOE 4.28 E = UC8279 (800x480
+      // variant). Anything else is unrecognized — take the UC8179 driver, the
+      // variant every unit benched so far has carried (observed VER=00 00 01 FF FF).
       const uint8_t lutVer = ver[2];
       g_probeDiag.promoted = true;
-      if (lutVer == 0x02 || lutVer == 0x68 || lutVer == 0x69) {
+      if (lutVer == 0x02 || lutVer == 0x41 || lutVer == 0x42 || lutVer == 0x68 || lutVer == 0x69) {
         BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::UC8279;
         BoardConfig::ACTIVE.displayControllerVariant = lutVer;
         if (Serial)
@@ -428,7 +429,7 @@ bool applyXteinkDisplayController() {
         BoardConfig::ACTIVE.displayControllerVariant = lutVer;
         if (Serial)
           Serial.printf("[%lu] [XTDET] promoted SSD1677 -> UC8179 (LUT_VER=%02X%s)\n", millis(), lutVer,
-                        lutVer == 0x01 ? "" : ", unrecognized -> UC8179 default");
+                        lutVer == 0x01 || lutVer == 0x40 ? "" : ", unrecognized -> UC8179 default");
       }
       return true;
     }
