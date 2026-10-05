@@ -13,41 +13,36 @@ decided at boot.
 
 ## Runtime detection
 
-After the X3 I2C fingerprint, `detectX3DisplayController()` runs the shared
-UC81xx probe (`probeDisplayController()` in `XteinkDetect.cpp`) over the X3
-display pins (SCLK 8 / SDA 10 / CS 21 / DC 4 / RST 5 / BUSY 6). It bit-bangs a
-half-duplex read: the command goes out with DC low, then SDA is released to
-input (pull-up) and the controller shifts each bit out on the SCLK falling
-edge. Each pass resets the controller, then reads **FLG (0x71)** and five bytes
-of **VER (0x70)**.
+After the X3 I2C fingerprint, `detectX3DisplayController()` runs
+`probeX3DisplayController()` on the fixed X3 pins (SCLK 8 / SDA 10 / CS 21 /
+DC 4 / RST 5 / BUSY 6), whatever profile is active; `detectXteinkDisplayController()`
+takes the same path when either X3 profile is already active. It follows the
+stock V6.3.15 protocol (ported from Free-Ink `main`):
 
-- A pass matches when FLG is a driven idle status (not `0x00`/`0xFF`, `BUSY_N`
-  bit 0 set) and VER is non-uniform. No `CHIP_VER` value is required: a shipping
-  X4 Pro UC8179 answered `00 00 01 FF FF`.
-- Pass 1 screens with a 1 ms reset; on the X3 (UC8253 profile active) a miss is
-  retried once with the vendor's 50 ms reset. Pass 2 repeats the read, with the
-  50 ms reset when pass 1 matched. Both must match and agree byte for byte.
-- When FLG is driven, **RMTP (0xA2)** dumps the MTP header (one dummy byte,
-  then MTP from `0x000`). A unit whose VER reads all `FF` is still accepted when
-  the MTP starts with the `0xA5` key, which only a programmed UC81xx returns.
-- A UC8253 has none of these reads: SDA floats to its pull-up, both passes
-  miss, and the UC8253 stays selected. Disagreeing passes are inconclusive and
-  also keep the UC8253.
+- RESET high 10 ms, low 50 ms, high 50 ms; wait up to 300 ms for BUSY high. A
+  timeout is recorded (`busyTimedOut`) but the read still runs, as in stock.
+- Send **VER (0x70)** with DC low, release SDA to input (no pull-up) and read
+  three bytes, sampling while SCLK is high.
+- Byte 3 decides: `0x66` = UC8279, `0xFF` = UC8253, anything else is
+  inconclusive and keeps the UC8253. FLG and MTP are not read.
 
 What a UC8279 unit logs at boot:
 
 ```
-[XTDET] bus probe VER=00 00 66 00 00 FLG=13 -> UltraChip
+[XTDET] X3 stock probe VER=00 00 66 BUSY-timeout=0 -> UC8279
 [XTDET] promoted UC8253 -> UC8279
 ```
 
-A UC8253 unit logs `-> default controller` and no promotion. `NVS hw_calib/screenType`
-is logged for reference only; a full flash from another unit can overwrite it.
+A UC8253 unit logs `X3 stock probe VER=FF FF FF BUSY-timeout=0 -> UC8253` and no
+promotion. Diagnostics
+(`getXteinkDisplayProbeDiag()`) report `verBytesRead=3`, the three bytes, and
+zero FLG/MTP. `NVS hw_calib/screenType` is logged for reference only; a full
+flash from another unit can overwrite it.
 
-**Upstream differs.** Free-Ink `main` replaced this matcher with the stock
-V6.3.15 protocol (RESET high 10 ms / low 50 ms / high 50 ms, wait up to 300 ms
-for BUSY, read three VER bytes; byte 3 `0x66` = UC8279, `0xFF` = UC8253, FLG and
-MTP not read). That change is not merged into this branch.
+The X4 family keeps its own fingerprint (two agreeing VER/FLG passes, RMTP `0xA5`
+fallback). `libs/hardware/XteinkDetect/test/host/` checks both protocols on the
+host (see its README); the electrical behaviour still needs a unit: cold boot
+and sleep/wake with the `X3 stock probe` log.
 
 ## Driver — `Uc8279Driver`
 
@@ -80,8 +75,8 @@ Tone separation and refresh quality still need checking on hardware.
 ## Simulator
 
 The lector QEMU simulator models this variant as board `x3uc8279`
-(`-global uc8253.uc8279=on`). It answers the boot probe with the values
-above (VER `00 00 66 00 00`, FLG `13`, MTP key `A5`), so the firmware promotes to
+(`-global uc8253.uc8279=on`). It answers the boot probe's VER read with a field
+unit's `00 00 66` (and FLG `13`, MTP key `A5` for the older matcher), so the firmware promotes to
 the UC8279 driver; the X3 e2e suite runs on both X3 panels and checks which
 controller was chosen. It does not model the UC8279's LUTs or gray look.
 
