@@ -555,12 +555,17 @@ void Uc8253X3Driver::skipInitialResync() {
   _redRamSynced = true;
 }
 
+// Drops the rails without DEEP_SLEEP (lector's 2 s idle powerOffPanel); the paint path
+// powers back on when the flag is clear. An idle panel left powered drifts into speckle.
+void Uc8253X3Driver::powerOff(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" X3 power-down");
+  _isScreenOn = false;
+}
+
 void Uc8253X3Driver::deepSleep(EpdBus& bus) {
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" X3 power-down");
-    _isScreenOn = false;
-  }
+  powerOff(bus);
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }

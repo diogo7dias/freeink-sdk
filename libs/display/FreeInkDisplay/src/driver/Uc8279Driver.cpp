@@ -220,12 +220,17 @@ void Uc8279Driver::skipInitialResync() {
   _initialFullsRemaining = 0;  // ...so don't force the boot clears
 }
 
+// Drops the rails without DEEP_SLEEP (lector's 2 s idle powerOffPanel); the paint path
+// powers back on when the flag is clear. An idle panel left powered drifts into speckle.
+void Uc8279Driver::powerOff(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8279 power-down");
+  _isScreenOn = false;
+}
+
 void Uc8279Driver::deepSleep(EpdBus& bus) {
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" 8279 power-down");
-    _isScreenOn = false;
-  }
+  powerOff(bus);
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }
