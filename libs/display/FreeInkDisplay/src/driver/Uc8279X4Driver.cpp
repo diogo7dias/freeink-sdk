@@ -408,12 +408,17 @@ void Uc8279X4Driver::requestResync(uint8_t settlePasses) {
 
 void Uc8279X4Driver::skipInitialResync() { _needFullClear = false; }
 
+// Drops the rails without DEEP_SLEEP; the paint path powers back on (PON) when the flag
+// is clear. Lost in the a2219cd6 merge, which left powerOffPanel() a no-op on this panel.
+void Uc8279X4Driver::powerOff(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8279x4 power-down");
+  _isScreenOn = false;
+}
+
 void Uc8279X4Driver::deepSleep(EpdBus& bus) {
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" 8279x4 power-down");
-    _isScreenOn = false;
-  }
+  powerOff(bus);
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }
