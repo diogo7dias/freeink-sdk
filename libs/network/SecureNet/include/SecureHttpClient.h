@@ -37,10 +37,10 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iterator>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,6 +71,14 @@ class SecureHttpClient {
     _rootCA = rootCA;
     _insecure = false;
   }
+  // See SecureClient::setPinnedCert. Copied, so the caller's buffer may go.
+  void setPinnedCert(const uint8_t* sha256) {
+    _hasPin = sha256 != nullptr;
+    if (sha256) std::copy(sha256, sha256 + cert_pin::SHA256_SIZE, _pin);
+  }
+  // After a failed request: the TLS peer was reached but not trusted (SecureClient).
+  bool certRejected() const { return _secure.certRejected(); }
+  const uint8_t* rejectedCert() const { return _secure.rejectedCert(); }
   void setTimeout(uint32_t ms) { _timeoutMs = ms; }
   // Progress reporting for response bodies (download meters). Called after
   // each delivered chunk with the running byte count; never called for
@@ -261,8 +269,10 @@ class SecureHttpClient {
         } else if (name == "connection") {
           std::string v = value;
           std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
-          if (v.find("close") != std::string::npos) keepAlive = false;
-          else if (v.find("keep-alive") != std::string::npos) keepAlive = true;
+          if (v.find("close") != std::string::npos)
+            keepAlive = false;
+          else if (v.find("keep-alive") != std::string::npos)
+            keepAlive = true;
         }
       }
       if (_aborted) {
@@ -409,9 +419,7 @@ class SecureHttpClient {
     return !host.empty() && (scheme == "http" || scheme == "https");
   }
 
-  std::string hostHeader() const {
-    return hostHeaderFor(_scheme, _host, _port);
-  }
+  std::string hostHeader() const { return hostHeaderFor(_scheme, _host, _port); }
 
   static std::string hostHeaderFor(const std::string& scheme, const std::string& host, uint16_t port) {
     const uint16_t defaultPort = scheme == "https" ? 443 : 80;
@@ -437,6 +445,7 @@ class SecureHttpClient {
       } else if (_rootCA) {
         _secure.setCACert(_rootCA);
       }
+      _secure.setPinnedCert(_hasPin ? _pin : nullptr);
       _secure.setTimeout(_timeoutMs);
       if (!_secure.connect(_host.c_str(), _port)) return false;
       _conn = &_secure;
@@ -627,6 +636,8 @@ class SecureHttpClient {
   std::string _authUser;
   std::string _authPass;
   bool _insecure = false;
+  bool _hasPin = false;
+  uint8_t _pin[cert_pin::SHA256_SIZE] = {};
   int _followRedirects = 0;
   bool _allowRedirectDowngrade = false;
   ProgressCallback _progress;
