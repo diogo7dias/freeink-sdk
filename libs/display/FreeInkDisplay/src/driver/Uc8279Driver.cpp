@@ -84,6 +84,7 @@ void Uc8279Driver::triggerGrayRefresh(EpdBus& bus, bool turnOff) {
   }
   bus.cmd(CMD_DISPLAY_REFRESH);
   bus.waitBusy(" 8279_gray_DRF");
+  waitPanelIdle(bus);
   if (turnOff) {
     bus.cmd(CMD_POWER_OFF);
     bus.waitBusy(" 8279_gray_POF");
@@ -131,6 +132,14 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   const bool useGc = (mode != RefreshMode::Fast) || !_oldPlaneValid || _forceFullSyncNext ||
                      _initialFullsRemaining > 0;
 
+  // Drive-all: the DU below idles every unchanged pixel (BB gets no drive at all, WW one
+  // frame), so anything it does not move stays on the panel. Two cases want every pixel
+  // moved whatever DTM1 says: inverted content (see below) and a one-shot request, which is
+  // a paint over a panel the controller knows nothing about (wake, silent reboot). GC does
+  // not need it: every GC cell ends on a target rail.
+  const bool driveAll = (_driveAllNext || _darkBackground) && !useGc;
+  _driveAllNext = false;
+
   bus.cmd(CMD_PARTIAL_IN);  // enter the full-panel PTL window set in init
 
   // KW planes: OLD (0x10) + NEW (0x13). Seed OLD white ONLY on the first paint
@@ -139,7 +148,7 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   if (!_oldPlaneValid) {
     bus.fillPlane(CMD_DTM1, 0xFF, _h, _wb);
     bus.cmd(CMD_DATA_STOP);
-  } else if (_darkBackground && !useGc) {
+  } else if (driveAll) {
     // Inverted content: a DU fast idles unchanged pixels, so the light residue
     // of every white->black transition parks in the black background and
     // accumulates between GC passes. Rewrite the OLD plane as the complement
@@ -183,6 +192,7 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   _pendingRefresh = false;
 
   bus.waitRefreshComplete(" 8279_DRF");
+  waitPanelIdle(bus);  // the CDI and DTM1 writes below must not land on a live waveform
   bus.cmd(CMD_VCOM_DATA_INTERVAL);  // restore the later-refresh CDI (border hold)
   bus.data(kUc8279X3_CdiLater);
 
@@ -196,6 +206,7 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
   bus.cmd(CMD_DATA_STOP);
   bus.cmd(CMD_PARTIAL_OUT);
+  waitPanelIdle(bus);  // the next refresh starts from an idle controller, not a busy one
   _oldPlaneValid = true;
   _firstRefresh = false;
   _forceFullSyncNext = false;
@@ -218,7 +229,17 @@ void Uc8279Driver::requestResync(uint8_t settlePasses) {
 void Uc8279Driver::skipInitialResync() {
   _oldPlaneValid = true;      // caller asserts the panel already holds a valid frame
   _initialFullsRemaining = 0;  // ...so don't force the boot clears
+  // "Valid" is the caller's word for the PANEL; DTM1 was never written since the reset,
+  // so a plain DU would diff against RAM that does not describe it and leave the old image
+  // standing wherever the two happen to agree. The first paint drives every pixel instead
+  // (the UC8253 sibling gets the same effect by promoting that paint to its half scrub).
+  _driveAllNext = true;
 }
+
+// Idle is BUSY_N staying high, not BUSY_N rising once: the X3 family raises it between the
+// phases of a waveform and while it digests a plane write (see Uc8253X3Driver::waitPanelIdle,
+// which measured the damage), and this panel shares the board and the two-phase BUSY wiring.
+void Uc8279Driver::waitPanelIdle(EpdBus& bus) { bus.waitIdleStable(kIdleStableMs, kBusyDrainTimeoutMs); }
 
 // Drops the rails without DEEP_SLEEP (lector's 2 s idle powerOffPanel); the paint path
 // powers back on when the flag is clear. An idle panel left powered drifts into speckle.

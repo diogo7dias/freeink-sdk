@@ -7,8 +7,10 @@
 //
 // Three-tier differential refresh, all single-phase 1-bpp:
 //   FAST -> `_fast` turbo LUTs (DTM1 holds prev frame, diffs against it)
-//   HALF -> `_half` scrub LUTs (WW==BW, WB==BB: drive to target ignoring DTM1)
-//   FULL -> `_full` OEM bank from a white DTM1 baseline + post-full settle pass
+//   HALF -> `_half` scrub LUTs (WW==BW, WB==BB: a pulse toward the opposite rail, then drive
+//           to target, ignoring DTM1)
+//   FULL -> `_full` OEM bank with DTM1 == DTM2 == target, so every pixel flashes through both
+//           rails, + post-full settle pass
 // Grayscale: `_gc` 4-level nudge (reader AA/cover) or `_full` (factory
 // absolute), reverted via the `_half` scrub bank. DTM1/DTM2 are the
 // controller's old/new RAM planes; CDI (cmd 0x50) selects differential (0x29)
@@ -121,9 +123,11 @@ class Uc8253X3Driver : public PanelDriver {
   bool _redRamSynced = false;
   bool _inGrayscaleMode = false;
   bool _darkBackground = false;
-  // One-shot from requestDriveAllNextFast(). Only reaches the fast branch when the panel
-  // is already on: the first paint after begin() is promoted to a half scrub regardless.
+  // One-shot from requestDriveAllNextFast(). Only reaches the fast branch after the first
+  // paint: the first paint after begin() is promoted to a half scrub regardless.
   bool _driveAllNext = false;
+  // Set by begin(), cleared by the first paint that does not power the panel down.
+  bool _promoteFirstPaint = false;
   uint8_t _initialFullSyncsRemaining = 0;
   bool _forceFullSyncNext = false;
   uint8_t _forcedConditionPassesNext = 0;

@@ -68,6 +68,13 @@ class EpdBus {
   // poll) before arming, so it is safe to call right after firing the refresh.
   void waitRefreshComplete(const char* tag = nullptr);
 
+  // Wait until an active-low BUSY (UC8253 / UC8279 X3) has stayed HIGH for stableMs.
+  // The waits above return on the first LOW->HIGH edge, but these panels raise BUSY
+  // between the phases of a waveform and while they digest a plane write, so one edge
+  // does not mean idle. Gives up after timeoutMs so a stuck line cannot wedge the
+  // caller. Returns the milliseconds spent waiting.
+  uint16_t waitIdleStable(unsigned long stableMs, unsigned long timeoutMs);
+
   // Instantaneous BUSY-pin read for non-blocking refresh polling. The UC/X3
   // active-low conventions both terminate HIGH, so LOW reports busy.
   bool isBusy() const {

@@ -64,6 +64,13 @@ initialization and waveforms recovered from stock firmware
   `0x20`–`0x24` before each refresh. Both diff against DTM1, which is re-synced
   to the shown frame after every refresh. The first two content paints after
   boot are forced to GC so the splash cannot ghost through.
+- A seamless start (`skipInitialResync()`) and `requestDriveAllNextFast()` make the next DU
+  drive every pixel: DTM1 is written as the complement of the target. A plain DU idles
+  unchanged pixels and DTM1 was never written since the reset, so without this the sleep face
+  survives the first paint. One-shot.
+- Every refresh waits for BUSY_N to stay high for 8 ms (`EpdBus::waitIdleStable`), after the
+  waveform and after the DTM1 sync, as the UC8253 driver does: the X3 raises BUSY between
+  waveform phases and while it digests a plane write.
 - CDI is `0x97` on the first refresh after init, `0xD7` after.
 - Grayscale: 4-level AA via the XTF_AA tables (LSB to DTM1, MSB to DTM2), with
   the XTF_PRE_BW_MID conditioning pass (`CCSET 0xE0` / `TSSET 0xE5`) before it.
