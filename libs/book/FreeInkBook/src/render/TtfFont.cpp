@@ -143,7 +143,9 @@ const GlyphBitmap* TtfFont::rasterize(uint32_t codepoint, uint16_t sizePx) {
   // Shares the advance cache with hasGlyph()/advance(), so the cmap lookup that
   // hasGlyph() just performed for this codepoint is not repeated here.
   const int glyph = glyphIndexFor(codepoint);
-  if (glyph == 0) return nullptr;
+  // U+FFFD is what a caller asks for once a character is missing: many fonts do not
+  // map it, so draw the font's own .notdef (glyph 0) rather than nothing.
+  if (glyph == 0 && codepoint != 0xFFFD) return nullptr;
   const float scale = scaleFor(sizePx);
 
   int x0 = 0;
