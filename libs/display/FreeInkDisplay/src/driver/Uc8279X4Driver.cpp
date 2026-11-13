@@ -342,6 +342,14 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.cmd(CMD_GATE_SCAN);
     bus.data(_cfg.gateScan);  // 0xE1 <- 0x02
   }
+  // Host waveform: uploaded before PON, as runGrayscalePrecondition() does.
+  const bool hostLut = fast && _cfg.fastLut != nullptr;
+  if (hostLut) {
+    for (int i = 0; i < 5; i++) {
+      bus.cmd(_cfg.fastLut[i][0]);
+      bus.data(&_cfg.fastLut[i][1], PREBW_LUT_LEN);
+    }
+  }
 
   powerOnIfNeeded(bus, " 8279x4_PON");
 
@@ -365,7 +373,8 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.data(0x01);
   }
   bus.cmd(CMD_PANEL_SETTING);
-  bus.data(static_cast<uint8_t>(_cfg.psr0 & 0xDF));  // REG cleared -> OTP (0x13)
+  // REG cleared -> OTP (0x13); kept set for a host waveform.
+  bus.data(static_cast<uint8_t>(hostLut ? _cfg.psr0 : (_cfg.psr0 & 0xDF)));
   bus.data(_cfg.psr1);
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform started (BUSY dropped) before returning, so
