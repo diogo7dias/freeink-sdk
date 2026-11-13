@@ -367,6 +367,10 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   bus.cmd(CMD_PANEL_SETTING);
   bus.data(static_cast<uint8_t>(_cfg.psr0 & 0xDF));  // REG cleared -> OTP (0x13)
   bus.data(_cfg.psr1);
+  if (_cfg.pllAfterPon != 0) {
+    bus.cmd(CMD_PLL);
+    bus.data(_cfg.pllAfterPon);
+  }
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform started (BUSY dropped) before returning, so
   // displayFinish() only rides out the completion edge.

@@ -57,6 +57,9 @@ struct Uc8279X4Config {
   // First visible gate: the UC8279 scans 600 gates with the bonded 480 starting
   // at this offset; rows outside it are padded 0xFF (white) in every DTM write.
   uint16_t gateOffset;
+  // Nonzero: PLL (0x30) value rewritten after PON on every built-in refresh, where
+  // PON's MTP reload can no longer undo it (the init write lands before PON). 0 = stock.
+  uint8_t pllAfterPon = 0;
 };
 
 const Uc8279X4Config& uc8279X4DefaultConfig();
