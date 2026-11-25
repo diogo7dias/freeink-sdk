@@ -287,11 +287,35 @@ void testPageRenderer(const char* fixturesDir, TtfFont& font) {
   CHECK(mid > 500);  // edge pixels with partial coverage = anti-aliasing
 }
 
+// A face with no U+FFFD (subset: .notdef and "A"). Asked for U+FFFD, the stand-in for
+// a missing character, it must draw .notdef with its advance, not return nothing.
+void testNotdefStandsInForFFFD(const char* path) {
+  static uint8_t data[16 * 1024];
+  FILE* f = std::fopen(path, "rb");
+  CHECK(f != nullptr);
+  if (f == nullptr) return;
+  const auto len = static_cast<uint32_t>(std::fread(data, 1, sizeof(data), f));
+  std::fclose(f);
+
+  static uint8_t buf[16 * 1024];
+  static Arena arena(buf, sizeof(buf));
+  static TtfFont face;
+  CHECK(face.init(data, len, arena));
+  CHECK(!face.hasGlyph(0xFFFD));          // coverage still says missing, so fallbacks run
+  CHECK(face.rasterize(0x732B, 32) == nullptr);  // any other missing codepoint: nothing
+  const GlyphBitmap* box = face.rasterize(0xFFFD, 32);
+  CHECK(box != nullptr);
+  if (box != nullptr) {
+    CHECK(box->advance > 0);
+    CHECK(box->width > 0 && box->height > 0);  // DejaVu's .notdef is a drawn box
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3) {
-    std::printf("usage: %s <fixtures-build-dir> <font.ttf>\n", argv[0]);
+  if (argc < 4) {
+    std::printf("usage: %s <fixtures-build-dir> <font.ttf> <font-without-fffd.ttf>\n", argv[0]);
     return 2;
   }
 
@@ -319,6 +343,7 @@ int main(int argc, char** argv) {
   testFontChain(font, second);
   testLayoutWithRealFont(argv[1], font);
   testPageRenderer(argv[1], font);
+  testNotdefStandsInForFFFD(argv[3]);
 
   std::printf("%d checks, %d failed\n", checksRun, checksFailed);
   return checksFailed == 0 ? 0 : 1;

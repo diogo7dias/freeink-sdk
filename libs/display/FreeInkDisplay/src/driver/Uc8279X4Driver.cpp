@@ -84,12 +84,21 @@ const uint8_t kXtfPreBwMid[5][PREBW_LUT_LEN + 1] = {
 };
 
 const GrayLut* selectAaLuts() {
-  // LUT_VER stored by the boot probe. 0x02 has its own table; 0x68 is the newer
-  // set. Reserved 0x69 (and anything unknown) falls back to the 0x68 bytes —
-  // the reference defines no AA waveform for it, and its init/built-in paths
-  // are identical.
-  return BoardConfig::ACTIVE.displayControllerVariant == 0x02 ? kXtfAa02 : kXtfAa68;
+  // LUT_VER stored by the boot probe. Stock's panel LUT registry (X4 Pro 260917
+  // build, table @0x3c1adbd4 + hardcoded bank selects in its UC8279 refresh)
+  // keys 0x02/0x03 to the QY bank and 0x68/0x69 to the ZHX bank; X4C V7.1.21
+  // points BOE 4.28 D/E (0x41/0x42) at the ZHX bank too. Anything else unknown
+  // falls back to the ZHX bytes. 0x67 never gets here (see otpOnly()).
+  const uint8_t v = BoardConfig::ACTIVE.displayControllerVariant;
+  return (v == 0x02 || v == 0x03) ? kXtfAa02 : kXtfAa68;
 }
+
+// LUT_VER 0x67: stock's registry (X4 Pro 260917 build) knows the id but ships no
+// external-LUT tables for it and leaves it out of the ZHX fallback — that panel
+// refreshes from OTP only, with no grayscale path. The grayscale entry points
+// below then keep the page B/W instead of driving it with another vendor's
+// waveform (Free-Ink main reports grayscale unsupported for it).
+bool otpOnly() { return BoardConfig::ACTIVE.displayControllerVariant == 0x67; }
 }  // namespace
 
 const Uc8279X4Config& uc8279X4DefaultConfig() {
@@ -333,6 +342,14 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.cmd(CMD_GATE_SCAN);
     bus.data(_cfg.gateScan);  // 0xE1 <- 0x02
   }
+  // Host waveform: uploaded before PON, as runGrayscalePrecondition() does.
+  const bool hostLut = fast && _cfg.fastLut != nullptr;
+  if (hostLut) {
+    for (int i = 0; i < 5; i++) {
+      bus.cmd(_cfg.fastLut[i][0]);
+      bus.data(&_cfg.fastLut[i][1], PREBW_LUT_LEN);
+    }
+  }
 
   powerOnIfNeeded(bus, " 8279x4_PON");
 
@@ -356,7 +373,8 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
     bus.data(0x01);
   }
   bus.cmd(CMD_PANEL_SETTING);
-  bus.data(static_cast<uint8_t>(_cfg.psr0 & 0xDF));  // REG cleared -> OTP (0x13)
+  // REG cleared -> OTP (0x13); kept set for a host waveform.
+  bus.data(static_cast<uint8_t>(hostLut ? _cfg.psr0 : (_cfg.psr0 & 0xDF)));
   bus.data(_cfg.psr1);
   bus.cmd(CMD_DISPLAY_REFRESH);
   // Confirm the waveform started (BUSY dropped) before returning, so
@@ -399,12 +417,17 @@ void Uc8279X4Driver::requestResync(uint8_t settlePasses) {
 
 void Uc8279X4Driver::skipInitialResync() { _needFullClear = false; }
 
+// Drops the rails without DEEP_SLEEP; the paint path powers back on (PON) when the flag
+// is clear. Lost in the a2219cd6 merge, which left powerOffPanel() a no-op on this panel.
+void Uc8279X4Driver::powerOff(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8279x4 power-down");
+  _isScreenOn = false;
+}
+
 void Uc8279X4Driver::deepSleep(EpdBus& bus) {
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" 8279x4 power-down");
-    _isScreenOn = false;
-  }
+  powerOff(bus);
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }
@@ -416,7 +439,7 @@ void Uc8279X4Driver::deepSleep(EpdBus& bus) {
 // conflated them → white-text ghosting). plane0/LSB -> DTM1 (0x10),
 // plane1/MSB -> DTM2 (0x13).
 void Uc8279X4Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
-  if (!lsb) return;
+  if (!lsb || otpOnly()) return;
   _absoluteGrayPlanes = false;
   if (_grayBaseValid && _grayBase != nullptr) {
     // plane0 = base | maskLsb  (base bit = 1 for white, 0 for non-white).
@@ -430,7 +453,7 @@ void Uc8279X4Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
 }
 
 void Uc8279X4Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
-  if (!msb) return;
+  if (!msb || otpOnly()) return;
   if (_absoluteGrayPlanes && _grayBase != nullptr) {
     // plane1 = plane0 ^ maskMsb (streamed inverted). Then recover the B/W base
     // for the post-DRF restore: base = plane0 & plane1 = plane0 & (plane0 ^ msb).
@@ -448,6 +471,7 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // lut, when non-null, replaces the variant-selected built-in xtfAa waveform data
   // (5 x GRAY_LUT_LEN bytes, contiguous, no command prefixes). See the write loop below.
   (void)factoryMode;  // 4-level is absolute (defined by the planes)
+  if (otpOnly()) return;
 
   // Vendor AA sequence: PSR (REG=1) -> [planes already in RAM via
   // copyGrayscale*] -> 5x49 LUTs -> CDI (constant 0x97) -> PON -> PSR rewrite ->
@@ -514,7 +538,7 @@ void Uc8279X4Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, Refres
   // state that can't run the non-flashing transition (first AA page / no valid
   // previous / pending full clear), takes a real B/W activation via display().
   // Otherwise use stock's non-flashing prev->current transition.
-  if (fallback == RefreshMode::Half || !_grayRefreshedOnce || !_oldPlaneValid || _needFullClear) {
+  if (fallback == RefreshMode::Half || !_grayRefreshedOnce || !_oldPlaneValid || _needFullClear || otpOnly()) {
     display(bus, fb, nullptr, fallback, turnOff);
     return;
   }

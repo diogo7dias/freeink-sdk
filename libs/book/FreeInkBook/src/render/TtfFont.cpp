@@ -33,7 +33,8 @@ const stbtt_fontinfo* fontOf(const uint8_t* storage) {
 bool TtfFont::init(const uint8_t* data, uint32_t len, Arena& glyphArena) {
   static_assert(sizeof(fontInfo_) >= sizeof(stbtt_fontinfo), "fontInfo_ storage too small");
   ready_ = false;
-  if (data == nullptr || len < 12) return false;
+  if (data == nullptr || len < 12 || len > 0x3FFFFFFF) return false;
+  stbtt_BindData(data, static_cast<int>(len));  // every stb read stays inside [data, data+len)
   const int offset = stbtt_GetFontOffsetForIndex(data, 0);
   if (offset < 0) return false;
   if (stbtt_InitFont(fontOf(fontInfo_), data, offset) == 0) return false;
@@ -143,7 +144,9 @@ const GlyphBitmap* TtfFont::rasterize(uint32_t codepoint, uint16_t sizePx) {
   // Shares the advance cache with hasGlyph()/advance(), so the cmap lookup that
   // hasGlyph() just performed for this codepoint is not repeated here.
   const int glyph = glyphIndexFor(codepoint);
-  if (glyph == 0) return nullptr;
+  // U+FFFD is what a caller asks for once a character is missing: many fonts do not
+  // map it, so draw the font's own .notdef (glyph 0) rather than nothing.
+  if (glyph == 0 && codepoint != 0xFFFD) return nullptr;
   const float scale = scaleFor(sizePx);
 
   int x0 = 0;

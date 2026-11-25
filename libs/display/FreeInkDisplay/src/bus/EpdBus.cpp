@@ -318,6 +318,17 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   }
 }
 
+uint16_t EpdBus::waitIdleStable(const unsigned long stableMs, const unsigned long timeoutMs) {
+  const unsigned long t0 = millis();
+  unsigned long highSince = t0;
+  while (millis() - highSince < stableMs) {
+    if (digitalRead(_pins.busy) == LOW) highSince = millis();
+    if (millis() - t0 >= timeoutMs) break;
+    delay(1);
+  }
+  return static_cast<uint16_t>(millis() - t0);
+}
+
 void EpdBus::waitRefreshComplete(const char* tag) {
   // The X4 Pro UC production wait is level-based, not edge-qualified. Keep the
   // same one-tick/idle-HIGH rule for refresh completion so a missed assertion

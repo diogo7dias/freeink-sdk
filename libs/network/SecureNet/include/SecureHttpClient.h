@@ -37,10 +37,10 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iterator>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,6 +71,14 @@ class SecureHttpClient {
     _rootCA = rootCA;
     _insecure = false;
   }
+  // See SecureClient::setPinnedCert. Copied, so the caller's buffer may go.
+  void setPinnedCert(const uint8_t* sha256) {
+    _hasPin = sha256 != nullptr;
+    if (sha256) std::copy(sha256, sha256 + cert_pin::SHA256_SIZE, _pin);
+  }
+  // After a failed request: the TLS peer was reached but not trusted (SecureClient).
+  bool certRejected() const { return _secure.certRejected(); }
+  const uint8_t* rejectedCert() const { return _secure.rejectedCert(); }
   void setTimeout(uint32_t ms) { _timeoutMs = ms; }
   // Progress reporting for response bodies (download meters). Called after
   // each delivered chunk with the running byte count; never called for
@@ -210,11 +218,13 @@ class SecureHttpClient {
     // or a missing status line on a socket that looked connected. That is a
     // property of the reused connection, not of the request, so it earns one
     // attempt on a fresh connection. A request that failed on a fresh
-    // connection is a real error and is not retried.
+    // connection is a real error and is not retried. A connection opened by
+    // connect() is fresh until a response has completed on it.
     for (int attempt = 0; attempt < 2; ++attempt) {
-      const bool reusing = connectionMatches();
       if (isAborted(shouldAbort)) return -1;
       if (!ensureConnected()) return -1;
+      // Read after ensureConnected(): if it had to reconnect, it cleared the flag.
+      const bool reusing = _connKeptAlive;
 
       if (!writeRequest(method, payload, payloadLen)) {
         closeConnection();
@@ -235,9 +245,22 @@ class SecureHttpClient {
       // Connection: keep-alive header (below) overrides that.
       bool keepAlive = line.compare(0, 9, "HTTP/1.0 ") != 0;
 
+      bool headersComplete = false;
+      size_t headerBytes = 0;
+      size_t lineBytes = 0;
+      bool skipped = false;
       std::string transferEncoding;
-      while (readLine(*_conn, line, headerDeadline, shouldAbort)) {
-        if (line.empty()) break;  // end of headers
+      while (readHeaderLine(*_conn, line, headerDeadline, lineBytes, skipped, shouldAbort)) {
+        headerBytes += lineBytes;
+        if (headerBytes > MAX_HEADER_BYTES) {
+          closeConnection();
+          return -1;
+        }
+        if (skipped) continue;
+        if (line.empty()) {
+          headersComplete = true;
+          break;
+        }
         const size_t colon = line.find(':');
         if (colon == std::string::npos) continue;
         std::string name = line.substr(0, colon);
@@ -261,11 +284,13 @@ class SecureHttpClient {
         } else if (name == "connection") {
           std::string v = value;
           std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
-          if (v.find("close") != std::string::npos) keepAlive = false;
-          else if (v.find("keep-alive") != std::string::npos) keepAlive = true;
+          if (v.find("close") != std::string::npos)
+            keepAlive = false;
+          else if (v.find("keep-alive") != std::string::npos)
+            keepAlive = true;
         }
       }
-      if (_aborted) {
+      if (_aborted || !headersComplete) {
         closeConnection();
         return -1;
       }
@@ -298,7 +323,11 @@ class SecureHttpClient {
       // Reuse only a provably clean connection. An aborted/truncated body
       // leaves undrained bytes on the socket, and the next request would parse
       // leftover body data as its status line.
-      if (!_reuse || !keepAlive || !_bodyComplete || !reusableFraming) closeConnection();
+      if (!_reuse || !keepAlive || !_bodyComplete || !reusableFraming) {
+        closeConnection();
+      } else {
+        _connKeptAlive = true;
+      }
       return _status;
     }
     return -1;
@@ -409,9 +438,7 @@ class SecureHttpClient {
     return !host.empty() && (scheme == "http" || scheme == "https");
   }
 
-  std::string hostHeader() const {
-    return hostHeaderFor(_scheme, _host, _port);
-  }
+  std::string hostHeader() const { return hostHeaderFor(_scheme, _host, _port); }
 
   static std::string hostHeaderFor(const std::string& scheme, const std::string& host, uint16_t port) {
     const uint16_t defaultPort = scheme == "https" ? 443 : 80;
@@ -437,6 +464,7 @@ class SecureHttpClient {
       } else if (_rootCA) {
         _secure.setCACert(_rootCA);
       }
+      _secure.setPinnedCert(_hasPin ? _pin : nullptr);
       _secure.setTimeout(_timeoutMs);
       if (!_secure.connect(_host.c_str(), _port)) return false;
       _conn = &_secure;
@@ -461,6 +489,7 @@ class SecureHttpClient {
     _connHost.clear();
     _connPort = 0;
     _connHttps = false;
+    _connKeptAlive = false;
   }
 
   // Request line + headers (+ body). Write results are checked: a stale
@@ -516,6 +545,44 @@ class SecureHttpClient {
           return true;
         }
         if (line.size() >= MAX_LINE) return false;
+        line += static_cast<char>(ch);
+      }
+      if (!c.connected() && c.available() == 0) return false;
+      delay(1);
+    }
+    return false;
+  }
+
+  // GitHub release responses can include a Content-Security-Policy header longer
+  // than MAX_LINE. Drain only that nonessential header without buffering it;
+  // keep size limits and reject oversized headers that might affect framing,
+  // redirects, authentication, or other callers.
+  bool readHeaderLine(Client& c, std::string& line, unsigned long deadline, size_t& bytes, bool& skipped,
+                      const AbortCallback& shouldAbort = nullptr) {
+    line.clear();
+    bytes = 0;
+    skipped = false;
+    static constexpr char CSP_PREFIX[] = "content-security-policy:";
+    while (static_cast<int32_t>(millis() - deadline) < 0) {
+      if (isAborted(shouldAbort)) return false;
+      while (c.available() > 0) {
+        const int ch = c.read();
+        if (ch < 0) break;
+        if (ch == '\n') {
+          if (!skipped && !line.empty() && line.back() == '\r') line.pop_back();
+          return true;
+        }
+        if (++bytes > MAX_HEADER_BYTES) return false;
+        if (skipped) continue;
+        if (line.size() >= MAX_LINE) {
+          if (!std::equal(CSP_PREFIX, CSP_PREFIX + sizeof(CSP_PREFIX) - 1, line.begin(),
+                          [](unsigned char a, unsigned char b) { return tolower(a) == tolower(b); })) {
+            return false;
+          }
+          skipped = true;
+          line.clear();
+          continue;
+        }
         line += static_cast<char>(ch);
       }
       if (!c.connected() && c.available() == 0) return false;
@@ -591,7 +658,8 @@ class SecureHttpClient {
   // connection mid-stream; 2 KB removed the stall. Stack-allocated in the
   // body readers, so kept modest.
   static constexpr size_t READ_CHUNK = 2048;
-  static constexpr size_t MAX_LINE = 4096;  // header / chunk-size line cap
+  static constexpr size_t MAX_LINE = 4096;          // buffered header / chunk-size line cap
+  static constexpr size_t MAX_HEADER_BYTES = 8192;  // total response header budget
 
   // Kept-alive connection state. _conn points at _secure or _plain while a
   // connection is held open, and null otherwise.
@@ -601,6 +669,7 @@ class SecureHttpClient {
   std::string _connHost;
   uint16_t _connPort = 0;
   bool _connHttps = false;
+  bool _connKeptAlive = false;  // a response completed on _conn and left it open
   bool _reuse = true;
 
   std::string _scheme;
@@ -627,6 +696,8 @@ class SecureHttpClient {
   std::string _authUser;
   std::string _authPass;
   bool _insecure = false;
+  bool _hasPin = false;
+  uint8_t _pin[cert_pin::SHA256_SIZE] = {};
   int _followRedirects = 0;
   bool _allowRedirectDowngrade = false;
   ProgressCallback _progress;

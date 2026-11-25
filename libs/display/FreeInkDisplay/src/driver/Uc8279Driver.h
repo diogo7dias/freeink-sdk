@@ -38,6 +38,7 @@ class Uc8279Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOff(EpdBus& bus) override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
@@ -46,6 +47,8 @@ class Uc8279Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
+  // The next FAST drives every pixel toward its target instead of only the changed ones.
+  void requestDriveAllNextFast() override { _driveAllNext = true; }
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
   // target each update. See displayStart().
@@ -75,6 +78,10 @@ class Uc8279Driver : public PanelDriver {
   void loadBank(EpdBus& bus, const uint8_t (*bank)[43]);
   // Load the raw (non-prefixed) 49-byte XTF_AA grayscale bank: 0x20+i then table.
   void loadXtfAa(EpdBus& bus);
+  // BUSY_N held high for kIdleStableMs; see the definition.
+  void waitPanelIdle(EpdBus& bus);
+  static constexpr unsigned long kIdleStableMs = 8;
+  static constexpr unsigned long kBusyDrainTimeoutMs = 2000;  // stuck-line bound, not a timing parameter
   // Blocking PON -> DRF -> wait (-> POF) used by the grayscale paths.
   void triggerGrayRefresh(EpdBus& bus, bool turnOff);
   // Enter the full 792x528 PTL partial window (PTIN + PTL). ALL RAM plane writes
@@ -91,6 +98,7 @@ class Uc8279Driver : public PanelDriver {
 
   bool _isScreenOn = false;
   bool _darkBackground = false;
+  bool _driveAllNext = false;  // one-shot, see requestDriveAllNextFast()
   bool _firstRefresh = true;   // CDI 0x97 on the first refresh after init, 0xD7 after
   bool _oldPlaneValid = false; // DTM1 holds a real previous frame (differential baseline)
   bool _forceFullSyncNext = false;

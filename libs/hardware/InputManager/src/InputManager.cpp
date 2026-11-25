@@ -662,6 +662,32 @@ unsigned long InputManager::lastTouchHeldMs() const {
 #endif
 }
 
+void InputManager::setTouchAsleep(const bool asleep) {
+#if FREEINK_CAP_TOUCH
+  const auto& t = BoardConfig::ACTIVE.touch;
+  if (t.controller != BoardConfig::TouchController::Gt911 || gt911Addr == 0 || t.irq < 0) return;
+  if (!asleep) {
+    if (touchPower == TouchPower::Asleep) touchPower = TouchPower::WakePulse;  // pollGt911 runs it
+    return;
+  }
+  if (touchPower != TouchPower::Awake || touchPressed || touchHomeKeyDown) return;
+  pinMode(t.irq, OUTPUT);
+  digitalWrite(t.irq, LOW);
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(0x80);
+  Wire.write(0x40);
+  Wire.write(0x05);
+  if (Wire.endTransmission() != 0) {
+    pinMode(t.irq, INPUT);  // command not taken: stay awake and keep polling
+    return;
+  }
+  touchPower = TouchPower::Asleep;
+  touchPowerAt = millis();
+#else
+  (void)asleep;
+#endif
+}
+
 bool InputManager::wasTouchActivity() const {
 #if FREEINK_CAP_TOUCH
   return touchPressedEvent || touchReleasedEvent;
@@ -1790,6 +1816,28 @@ void InputManager::pollFt6336u(const unsigned long now) {
 
 void InputManager::pollGt911(const unsigned long now) {
   if (gt911Addr == 0) {
+    return;
+  }
+  if (touchPower != TouchPower::Awake) {
+    const int8_t irq = BoardConfig::ACTIVE.touch.irq;
+    if (touchPower == TouchPower::WakePulse && now - touchPowerAt >= 58) {  // datasheet: >58 ms asleep first
+      digitalWrite(irq, HIGH);
+      delayMicroseconds(3000);
+      digitalWrite(irq, LOW);
+      touchPower = TouchPower::WakeSync;
+      touchPowerAt = now;
+    } else if (touchPower == TouchPower::WakeSync && now - touchPowerAt >= 50) {
+      pinMode(irq, INPUT);
+      touchPower = TouchPower::Awake;
+      // Touch carries Back and Confirm on some boards, so a controller that
+      // stays asleep must never strand the reader: no answer means a full reset.
+      uint8_t status = 0;
+      if (gt911ReadReg(0x814E, &status, 1)) {
+        gt911ClearStatus();
+      } else {
+        beginGt911();
+      }
+    }
     return;
   }
   uint8_t status = 0;

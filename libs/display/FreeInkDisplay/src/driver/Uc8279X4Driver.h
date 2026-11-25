@@ -57,6 +57,10 @@ struct Uc8279X4Config {
   // First visible gate: the UC8279 scans 600 gates with the bonded 480 starting
   // at this offset; rows outside it are padded 0xFF (white) in every DTM write.
   uint16_t gateOffset;
+  // Non-null: a Fast refresh runs these 5 command-prefixed waveform tables
+  // (0x20-0x24, 42 data bytes each, the XTF_PRE_BW_MID layout) with PSR REG=1
+  // instead of the OTP DU waveform. Null = stock.
+  const uint8_t (*fastLut)[43] = nullptr;
 };
 
 const Uc8279X4Config& uc8279X4DefaultConfig();
@@ -71,6 +75,7 @@ class Uc8279X4Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOff(EpdBus& bus) override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;

@@ -22,6 +22,8 @@
 #include <Client.h>
 #include <WiFiClient.h>
 
+#include "CertPin.h"
+
 namespace freeink {
 
 class SecureClient : public Client {
@@ -30,8 +32,17 @@ class SecureClient : public Client {
   ~SecureClient() override;
 
   // Certificate / verification configuration (applied before connect()).
+  // With a root set, the peer's chain must verify against it and its leaf must
+  // name the host (wolfSSL_check_domain_name).
   void setCACert(const char* rootCA);
   void setInsecure();  // skip peer verification (testing only)
+  // Trust a peer that fails that check when its leaf certificate's SHA-256 is
+  // `sha256` (a self-signed server the user accepted). nullptr clears.
+  void setPinnedCert(const uint8_t* sha256);
+  // After a failed connect(): the peer was reached but not trusted. rejectedCert()
+  // is the SHA-256 of the leaf it presented, for the user to compare and accept.
+  bool certRejected() const { return _pin.rejected; }
+  const uint8_t* rejectedCert() const { return _pin.seen; }
 
   // Connect and perform a TLS 1.3 handshake to host:port (uses the SNI host).
   int connect(IPAddress ip, uint16_t port) override;
@@ -57,6 +68,7 @@ class SecureClient : public Client {
   WiFiClient _transport;
   const char* _rootCA = nullptr;
   bool _insecure = false;
+  cert_pin::State _pin;
   void* _ssl = nullptr;  // WOLFSSL* (opaque to keep wolfSSL headers out of here)
   void* _ctx = nullptr;  // WOLFSSL_CTX*
   bool _connected = false;
