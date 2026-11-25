@@ -33,7 +33,8 @@ const stbtt_fontinfo* fontOf(const uint8_t* storage) {
 bool TtfFont::init(const uint8_t* data, uint32_t len, Arena& glyphArena) {
   static_assert(sizeof(fontInfo_) >= sizeof(stbtt_fontinfo), "fontInfo_ storage too small");
   ready_ = false;
-  if (data == nullptr || len < 12) return false;
+  if (data == nullptr || len < 12 || len > 0x3FFFFFFF) return false;
+  stbtt_BindData(data, static_cast<int>(len));  // every stb read stays inside [data, data+len)
   const int offset = stbtt_GetFontOffsetForIndex(data, 0);
   if (offset < 0) return false;
   if (stbtt_InitFont(fontOf(fontInfo_), data, offset) == 0) return false;
