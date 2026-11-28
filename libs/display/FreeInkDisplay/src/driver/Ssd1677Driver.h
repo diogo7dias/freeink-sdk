@@ -78,6 +78,7 @@ class Ssd1677Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOff(EpdBus& bus) override { powerOffController(bus); }
 
   void setFastQuality(FastQuality quality) override { _fastQuality = quality; }
   bool supportsFastTurbo() const override { return _cfg.allowFastTurbo; }

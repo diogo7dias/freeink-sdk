@@ -66,6 +66,12 @@ class Uc8179Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOff(EpdBus& bus) override {
+    if (!_isScreenOn) return;
+    bus.cmd(0x02);  // CMD_POWER_OFF (POF)
+    bus.waitBusy(" 8179 power-down");
+    _isScreenOn = false;
+  }
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
