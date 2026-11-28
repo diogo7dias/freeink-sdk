@@ -671,6 +671,7 @@ void InputManager::setTouchAsleep(const bool asleep) {
     return;
   }
   if (touchPower != TouchPower::Awake || touchPressed || touchHomeKeyDown) return;
+  detachGt911Irq();
   pinMode(t.irq, OUTPUT);
   digitalWrite(t.irq, LOW);
   Wire.beginTransmission(gt911Addr);
@@ -679,6 +680,7 @@ void InputManager::setTouchAsleep(const bool asleep) {
   Wire.write(0x05);
   if (Wire.endTransmission() != 0) {
     pinMode(t.irq, INPUT);  // command not taken: stay awake and keep polling
+    attachGt911Irq();
     return;
   }
   touchPower = TouchPower::Asleep;
@@ -1474,8 +1476,101 @@ void InputManager::pollFt5x06(const unsigned long now) {
 
 // --- GT911 (LilyGo) ---------------------------------------------------------
 
+namespace {
+// Latched by the GT911 INT pin ISR; must live in DRAM because the ISR runs from
+// IRAM while SPI flash cache can be suspended.
+DRAM_ATTR volatile bool gGt911IrqLatched = false;
+
+void IRAM_ATTR gt911IrqHandler() { gGt911IrqLatched = true; }
+}  // namespace
+
+void InputManager::detachGt911Irq() {
+  const int8_t irq = BoardConfig::ACTIVE.touch.irq;
+  if (gt911IrqAttached && irq >= 0) {
+    detachInterrupt(digitalPinToInterrupt(irq));
+  }
+  gt911IrqAttached = false;
+}
+
+void InputManager::attachGt911Irq() {
+  const int8_t irq = BoardConfig::ACTIVE.touch.irq;
+  if (irq < 0) {
+    gt911IrqAttached = false;
+    return;
+  }
+  detachGt911Irq();
+  pinMode(irq, INPUT);
+  const int trigger = (gt911IntMode == 1 || gt911IntMode == 2) ? FALLING : RISING;
+  attachInterrupt(digitalPinToInterrupt(irq), gt911IrqHandler, trigger);
+  gt911IrqAttached = true;
+  // Force one initial poll so any frame buffered before attach is drained.
+  gGt911IrqLatched = true;
+}
+
+void InputManager::configureGt911IntMode() {
+  static constexpr uint16_t REG_CONFIG_START = 0x8047;
+  static constexpr uint16_t REG_MODULE_SWITCH1 = 0x8055;
+  static constexpr uint16_t REG_CONFIG_FRESH = 0x8100;
+  static constexpr size_t CONFIG_BODY_LEN = 184;                   // 0x8047..0x80FE
+  static constexpr size_t CONFIG_TOTAL_LEN = CONFIG_BODY_LEN + 1;  // + checksum at 0x80FF
+  static constexpr uint8_t I2C_CHUNK = 32;
+
+  uint8_t modSwitch1 = 0;
+  if (!gt911ReadReg(REG_MODULE_SWITCH1, &modSwitch1, 1)) {
+    return;
+  }
+  uint8_t mode = modSwitch1 & 0x03;
+
+  // 0=rising edge, 1=falling edge, 2=low level, 3=high level.
+  // If level-triggered, switch to the matching edge mode only when the full
+  // 185-byte config block checksum verifies cleanly (never write a corrupt table).
+  if (mode == 2 || mode == 3) {
+    uint8_t cfg[CONFIG_TOTAL_LEN] = {};
+    bool readOk = true;
+    for (size_t off = 0; off < CONFIG_TOTAL_LEN; off += I2C_CHUNK) {
+      const uint8_t chunk = static_cast<uint8_t>(std::min<size_t>(I2C_CHUNK, CONFIG_TOTAL_LEN - off));
+      if (!gt911ReadReg(static_cast<uint16_t>(REG_CONFIG_START + off), cfg + off, chunk)) {
+        readOk = false;
+        break;
+      }
+    }
+    if (readOk) {
+      uint8_t sum = 0;
+      for (size_t i = 0; i < CONFIG_BODY_LEN; ++i) sum = static_cast<uint8_t>(sum + cfg[i]);
+      if (static_cast<uint8_t>(sum + cfg[CONFIG_BODY_LEN]) == 0) {
+        const uint8_t targetMode = (mode == 2) ? 0x01 : 0x00;
+        const size_t switchIdx = REG_MODULE_SWITCH1 - REG_CONFIG_START;
+        cfg[switchIdx] = static_cast<uint8_t>((cfg[switchIdx] & ~0x03) | targetMode);
+        sum = 0;
+        for (size_t i = 0; i < CONFIG_BODY_LEN; ++i) sum = static_cast<uint8_t>(sum + cfg[i]);
+        cfg[CONFIG_BODY_LEN] = static_cast<uint8_t>(0 - sum);
+
+        bool writeOk = true;
+        for (size_t off = 0; off < CONFIG_TOTAL_LEN; off += I2C_CHUNK) {
+          const uint8_t chunk = static_cast<uint8_t>(std::min<size_t>(I2C_CHUNK, CONFIG_TOTAL_LEN - off));
+          if (!gt911WriteReg(static_cast<uint16_t>(REG_CONFIG_START + off), cfg + off, chunk)) {
+            writeOk = false;
+            break;
+          }
+        }
+        const uint8_t fresh = 0x01;
+        if (writeOk && gt911WriteReg(REG_CONFIG_FRESH, &fresh, 1)) {
+          delay(10);
+          if (gt911ReadReg(REG_MODULE_SWITCH1, &modSwitch1, 1)) {
+            mode = modSwitch1 & 0x03;
+          }
+        }
+      }
+    }
+  }
+
+  gt911IntMode = mode;
+  attachGt911Irq();
+}
+
 void InputManager::beginGt911() {
   const auto& t = BoardConfig::ACTIVE.touch;
+  detachGt911Irq();
 
   // Power the touch rail first (boards that gate it, e.g. Sticky's TOUCH_EN on
   // GPIO42). Active-high + settle, before the reset dance and I2C probe;
@@ -1537,12 +1632,26 @@ void InputManager::beginGt911() {
   }
 
   touchDataEnabled = (gt911Addr != 0);
+  if (touchDataEnabled) {
+    gt911ClearStatus();
+    configureGt911IntMode();
+  }
 #ifdef TOUCH_PROBE_DEBUG
   touchDebugPrintf(
-      "[touch] GT911 probe: addr=0x%02X enabled=%d (sda=%d scl=%d "
+      "[touch] GT911 probe: addr=0x%02X enabled=%d intMode=%u irqAttached=%d (sda=%d scl=%d "
       "cand=0x%02X/0x%02X)\n",
-      gt911Addr, touchDataEnabled, t.sda, t.scl, t.i2cAddress, t.i2cAddressAlt);
+      gt911Addr, touchDataEnabled, gt911IntMode, gt911IrqAttached, t.sda, t.scl, t.i2cAddress, t.i2cAddressAlt);
 #endif
+}
+
+bool InputManager::gt911WriteReg(const uint16_t reg, const uint8_t* buf, const uint8_t len) {
+  Wire.beginTransmission(gt911Addr);
+  Wire.write(static_cast<uint8_t>(reg >> 8));
+  Wire.write(static_cast<uint8_t>(reg & 0xFF));
+  for (uint8_t i = 0; i < len; ++i) {
+    Wire.write(buf[i]);
+  }
+  return Wire.endTransmission() == 0;
 }
 
 bool InputManager::gt911ReadReg(const uint16_t reg, uint8_t* buf, const uint8_t len) {
@@ -1834,30 +1943,44 @@ void InputManager::pollGt911(const unsigned long now) {
       uint8_t status = 0;
       if (gt911ReadReg(0x814E, &status, 1)) {
         gt911ClearStatus();
+        attachGt911Irq();
       } else {
         beginGt911();
       }
     }
     return;
   }
+
+  // Capacitive home key long-press (status bit 0x10). Fire from the LATCHED
+  // down-state + wall clock, BEFORE the IRQ and buffer-ready gates below: a
+  // motionless hold stops producing new-data frames (and INT edges), so gating
+  // the hold timer on fresh frames would never let it cross the threshold.
+  if (touchHomeKeyDown && !touchHomeKeyLongFired && now - touchHomeKeyDownAt >= HOME_KEY_LONG_PRESS_MS) {
+    touchHomeKeyLongEvent = true;  // crossed the threshold (a hold shortcut)
+    touchHomeKeyLongFired = true;  // once per hold; also suppresses the release tap
+  }
+
+  // Skip idle I2C reads when no INT edge has fired since the last read. Keep
+  // polling while any contact or capacitive home key is down so a release frame
+  // is never missed even if an edge was coalesced.
+  const int8_t irqPin = BoardConfig::ACTIVE.touch.irq;
+  const bool levelActive = (gt911IntMode == 2 && irqPin >= 0 && digitalRead(irqPin) == LOW) ||
+                           (gt911IntMode == 3 && irqPin >= 0 && digitalRead(irqPin) == HIGH);
+  const bool irqPending = gGt911IrqLatched || levelActive;
+  if (gt911IrqAttached && !irqPending && !touchPressed && !touchHomeKeyDown) {
+    return;
+  }
+  gGt911IrqLatched = false;
+
   uint8_t status = 0;
   if (!gt911ReadReg(0x814E, &status, 1)) {
+    if (irqPending) gGt911IrqLatched = true;
     // Keep the last complete frame while the single-touch state remains
     // latched. Clearing only this snapshot makes a transient I2C failure look
     // like a multi-contact release to multi-touch consumers, which can split one
     // physical gesture into two. A confirmed zero-contact frame below clears
     // the snapshot together with the rest of the touch state.
     return;
-  }
-
-  // Capacitive home key long-press (status bit 0x10). Fire from the LATCHED
-  // down-state + wall clock, BEFORE the buffer-ready gate below: a motionless
-  // hold stops producing new-data frames (0x80 stays clear), so gating the hold
-  // timer on fresh frames would never let it cross the threshold. The
-  // press/release EDGES still come from fresh frames (handled after the gate).
-  if (touchHomeKeyDown && !touchHomeKeyLongFired && now - touchHomeKeyDownAt >= HOME_KEY_LONG_PRESS_MS) {
-    touchHomeKeyLongEvent = true;  // crossed the threshold (a hold shortcut)
-    touchHomeKeyLongFired = true;  // once per hold; also suppresses the release tap
   }
 
   if (!(status & 0x80)) {  // buffer not ready

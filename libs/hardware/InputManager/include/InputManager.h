@@ -321,7 +321,11 @@ class InputManager {
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
+  bool gt911WriteReg(uint16_t reg, const uint8_t* buf, uint8_t len);
   void gt911ClearStatus();
+  void configureGt911IntMode();
+  void attachGt911Irq();
+  void detachGt911Irq();
   void beginFt6336u();
   void pollFt6336u(unsigned long now);
 
@@ -373,6 +377,8 @@ class InputManager {
 
   bool touchDataEnabled = false;         // I2C up, controller present
   uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)
+  uint8_t gt911IntMode = 1;              // 0x8055[1:0]: 0=rising, 1=falling, 2=low, 3=high
+  bool gt911IrqAttached = false;         // true when GPIO INT ISR gates idle I2C reads
   unsigned long touchIrqPulseUntil = 0;  // synthesized-confirm window after a press
   unsigned long touchReadAt = 0;         // next scheduled I2C poll
   unsigned long touchReleaseAt = 0;
