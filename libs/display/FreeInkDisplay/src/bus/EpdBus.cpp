@@ -330,11 +330,51 @@ uint16_t EpdBus::waitIdleStable(const unsigned long stableMs, const unsigned lon
 }
 
 void EpdBus::waitRefreshComplete(const char* tag) {
-  // The X4 Pro UC production wait is level-based, not edge-qualified. Keep the
-  // same one-tick/idle-HIGH rule for refresh completion so a missed assertion
-  // edge can never make the caller write RAM while the waveform is still busy.
+  // X4 Pro UC8179/UC8279: BUSY_N is active-LOW and idles HIGH. Wait one tick
+  // for the refresh command to latch, then sleep the task on a rising-edge ISR
+  // semaphore with a post-attach level check so an early edge cannot hang it.
   if (_busy == BusyPolarity::UcIdleHigh) {
-    waitBusy(_busy, tag);  // accounts for its own time
+    if (_busyWaitSliceHook != nullptr || !s_epdRefreshDone) {
+      waitBusy(_busy, tag);
+      return;
+    }
+    const Accumulate timed(_busyUs);
+    const unsigned long start = millis();
+    delay(1);
+    if (digitalRead(_pins.busy) == HIGH) {
+      if (tag && Serial) {
+        Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
+      }
+      return;
+    }
+    xSemaphoreTake(s_epdRefreshDone, 0);
+    attachInterrupt(digitalPinToInterrupt(_pins.busy), epdBusyIsr, RISING);
+    if (digitalRead(_pins.busy) == LOW) {
+      const bool hook = (_busyWaitBeginHook != nullptr);
+      if (hook) _busyWaitBeginHook();
+      while (digitalRead(_pins.busy) == LOW) {
+        const unsigned long elapsed = millis() - start;
+        if (elapsed >= UC_IDLE_TIMEOUT_MS) {
+          if (Serial) {
+            Serial.printf("[%lu]   BUSY_N never returned high: %s (%lu ms)\n", millis(), tag ? tag : "?", elapsed);
+          }
+          break;
+        }
+        if (xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(UC_IDLE_TIMEOUT_MS - elapsed)) != pdTRUE &&
+            digitalRead(_pins.busy) == LOW) {
+          if (Serial) {
+            Serial.printf("[%lu]   BUSY_N never returned high: %s (%lu ms)\n", millis(), tag ? tag : "?",
+                          millis() - start);
+          }
+          break;
+        }
+      }
+      if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
+    }
+    detachInterrupt(digitalPinToInterrupt(_pins.busy));
+    if (tag && Serial) {
+      Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
+    }
     return;
   }
   // A host that installed a busy-wait slice hook (e.g. CrossPoint light-sleeping
