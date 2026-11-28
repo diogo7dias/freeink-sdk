@@ -17,10 +17,10 @@ namespace freeink {
 
 // Device-tunable SSD1677 waveform/config. A board overrides only what differs.
 struct Ssd1677Config {
-  uint8_t booster[5];               // booster soft-start (CMD 0x0C)
-  uint8_t driverOutputScan;         // CMD 0x01 base scan byte (0x02); mirrorY ORs TB
-  uint8_t borderWaveformInit;        // CMD 0x3C value written during controller init
-  uint8_t halfRefreshTemp;          // temperature byte written for HALF refresh
+  uint8_t booster[5];            // booster soft-start (CMD 0x0C)
+  uint8_t driverOutputScan;      // CMD 0x01 base scan byte (0x02); mirrorY ORs TB
+  uint8_t borderWaveformInit;    // CMD 0x3C value written during controller init
+  uint8_t halfRefreshTemp;       // temperature byte written for HALF refresh
   const unsigned char* grayLut;  // 110-byte custom LUT for grayscale display
   // Absolute Display Update Control 2 (0x22) sequence values, per refresh type.
   // 0 = use the driver's built-in X4 values (incremental, keeps the panel powered
@@ -78,7 +78,21 @@ class Ssd1677Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
-  void powerOff(EpdBus& bus) override { powerOffController(bus); }
+  // Drop the analog booster and clock rails while keeping the controller awake and
+  // the bistable image intact. Waits on active-high BUSY directly instead of
+  // powerOffController()'s fixed 200 ms deepSleep stall, which blocked main.cpp's
+  // 2 s idle loop long enough to drop taps arriving right at the idle threshold.
+  void powerOff(EpdBus& bus) override {
+    if (!_isScreenOn) return;
+    bus.cmd(0x3C);  // CMD_BORDER_WAVEFORM
+    bus.data(_cfg.borderWaveformInit);
+    bus.cmd(0x22);   // CMD_DISPLAY_UPDATE_CTRL2
+    bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
+    bus.cmd(0x20);   // CMD_MASTER_ACTIVATION
+    delay(1);
+    bus.waitBusy(" display power-down");
+    _isScreenOn = false;
+  }
 
   void setFastQuality(FastQuality quality) override { _fastQuality = quality; }
   bool supportsFastTurbo() const override { return _cfg.allowFastTurbo; }
